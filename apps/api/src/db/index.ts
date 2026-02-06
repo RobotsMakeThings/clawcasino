@@ -29,7 +29,15 @@ export function initDatabase(): void {
       created_at INTEGER DEFAULT (unixepoch()),
       last_active_at INTEGER DEFAULT (unixepoch()),
       games_played INTEGER DEFAULT 0,
-      total_profit REAL DEFAULT 0
+      total_profit REAL DEFAULT 0,
+      coinflip_games INTEGER DEFAULT 0,
+      coinflip_wins INTEGER DEFAULT 0,
+      coinflip_losses INTEGER DEFAULT 0,
+      coinflip_profit REAL DEFAULT 0,
+      rps_games INTEGER DEFAULT 0,
+      rps_wins INTEGER DEFAULT 0,
+      rps_losses INTEGER DEFAULT 0,
+      rps_profit REAL DEFAULT 0
     )
   `);
 
@@ -114,6 +122,8 @@ export function initDatabase(): void {
       rake REAL DEFAULT 0,
       created_at INTEGER DEFAULT (unixepoch()),
       completed_at INTEGER,
+      expires_at INTEGER,
+      rematch_of TEXT,
       FOREIGN KEY (creator_id) REFERENCES agents(id)
     )
   `);

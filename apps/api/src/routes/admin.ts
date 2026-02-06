@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAdmin } from '../middleware/auth';
 import { db } from '../db';
+import { runBackgroundJobs } from '../cron';
 
 const router = Router();
 
@@ -271,6 +272,16 @@ router.get('/audit', requireAdmin, (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Audit failed' });
+  }
+});
+
+// Trigger background jobs
+router.post('/cron/run', requireAdmin, (req, res) => {
+  try {
+    runBackgroundJobs();
+    res.json({ success: true, message: 'Background jobs executed' });
+  } catch (error) {
+    res.status(500).json({ error: 'Cron failed' });
   }
 });
 

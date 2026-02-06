@@ -7,6 +7,7 @@ import { WebSocketServer } from 'ws';
 
 import { initDatabase, initDefaultTables } from './db';
 import { errorHandler } from './middleware/auth';
+import { runBackgroundJobs } from './cron';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -78,3 +79,7 @@ server.listen(PORT, () => {
   console.log(`🦀 ClawCasino API running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
 });
+
+// Run background jobs every 60 seconds
+setInterval(runBackgroundJobs, 60000);
+console.log('⏰ Background jobs scheduled (every 60s)');
