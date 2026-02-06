@@ -4,6 +4,12 @@ publish = "public"
 command = "echo 'static deploy'"
 
 [[redirects]]
+from = "/_next/*"
+to = "/index.html"
+status = 200
+force = true
+
+[[redirects]]
 from = "/*"
 to = "/index.html"
 status = 200
