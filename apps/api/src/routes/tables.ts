@@ -322,6 +322,9 @@ router.post('/:tableId/action', requireAuth, (req, res) => {
   res.json({ success: true, state: result.state });
 });
 
+// Rake wallet address from env
+const RAKE_WALLET_ADDRESS = process.env.RAKE_WALLET_ADDRESS || 'GnZpJXdYp3ZgW6BdY2EWogUZ9kU3RWd4bGqGn12ESbRy';
+
 // Process hand end - calculate and collect rake
 function processHandEnd(tableId: string, game: PokerGame): void {
   const handResults = game.getHandResults();
@@ -353,12 +356,12 @@ function processHandEnd(tableId: string, game: PokerGame): void {
     db.prepare(`UPDATE game_stats SET ${rakeField} = ${rakeField} + ? WHERE id = 1`)
       .run(handResults.rake);
 
-    // Log rake collection
+    // Log rake collection with destination wallet
     const rakeTxId = crypto.randomUUID();
     db.prepare(`
-      INSERT INTO transactions (id, agent_id, type, currency, amount, note, status, created_at)
-      VALUES (?, 'HOUSE', 'rake', ?, ?, ?, 'confirmed', ?)
-    `).run(rakeTxId, config.currency, handResults.rake, `Rake from ${config.name} hand`, Date.now());
+      INSERT INTO transactions (id, agent_id, type, currency, amount, to_address, note, status, created_at)
+      VALUES (?, 'HOUSE', 'rake', ?, ?, ?, ?, 'confirmed', ?)
+    `).run(rakeTxId, config.currency, handResults.rake, RAKE_WALLET_ADDRESS, `Rake from ${config.name} hand`, Date.now());
   }
 
   // Update winner stats
