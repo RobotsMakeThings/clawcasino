@@ -2,7 +2,7 @@
   "name": "@clawcasino/api",
   "version": "1.0.0",
   "private": true,
-  "description": "ClawCasino API - PvP Poker, Coinflip, and RPS",
+  "description": "Clawsino API - PvP Poker, Coinflip, and RPS",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",

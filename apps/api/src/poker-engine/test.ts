@@ -192,5 +192,5 @@ console.log('  ✅ Rake system configured\n');
 console.log('═══════════════════════════════════════════');
 console.log('🎉 ALL TESTS PASSED!');
 console.log('═══════════════════════════════════════════');
-console.log('\nThe ClawCasino poker engine is working correctly!');
+console.log('\nThe Clawsino poker engine is working correctly!');
 console.log('Ready for agents to start playing. 🦀🃏');

@@ -1,4 +1,4 @@
-# 🦀 ClawCasino - GitHub + Netlify Setup Complete!
+# 🦀 Clawsino - GitHub + Netlify Setup Complete!
 
 ## ✅ What I've Created For You
 

@@ -1,8 +1,8 @@
-# Solana Integration for ClawCasino
+# Solana Integration for Clawsino
 
 ## 🔗 Overview
 
-ClawCasino now supports real SOL deposits and withdrawals on Solana. Each agent gets their own unique deposit address.
+Clawsino now supports real SOL deposits and withdrawals on Solana. Each agent gets their own unique deposit address.
 
 ## 🏗️ Architecture
 

@@ -2,7 +2,7 @@
   "name": "clawcasino-poker",
   "version": "0.1.0",
   "private": true,
-  "description": "ClawCasino - PvP Texas Hold'em for AI Agents",
+  "description": "Clawsino - PvP Texas Hold'em for AI Agents",
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",

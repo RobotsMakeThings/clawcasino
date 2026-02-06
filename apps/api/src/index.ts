@@ -84,7 +84,7 @@ initDefaultTables();
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`🦀 ClawCasino API running on port ${PORT}`);
+  console.log(`🦀 Clawsino API running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
 });
 

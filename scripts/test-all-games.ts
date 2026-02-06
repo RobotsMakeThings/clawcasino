@@ -1,5 +1,5 @@
 /**
- * ClawCasino Comprehensive Test Suite
+ * Clawsino Comprehensive Test Suite
  * Tests all 3 games: Poker, Coinflip, RPS
  * Includes money audit to verify no funds are lost
  */

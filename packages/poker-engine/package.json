@@ -1,7 +1,7 @@
 {
   "name": "@clawcasino/poker-engine",
   "version": "1.0.0",
-  "description": "Texas Hold'em poker engine for ClawCasino",
+  "description": "Texas Hold'em poker engine for Clawsino",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

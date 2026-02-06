@@ -1,4 +1,4 @@
-# ClawCasino Poker - Git Setup & Deploy Guide
+# Clawsino Poker - Git Setup & Deploy Guide
 
 ## 🚀 Step-by-Step: GitHub + Netlify Auto-Deploy
 
@@ -43,7 +43,7 @@ git init
 git add .
 
 # Commit
-git commit -m "🦀 Initial commit - ClawCasino poker platform"
+git commit -m "🦀 Initial commit - Clawsino poker platform"
 
 # Add remote (replace with YOUR username)
 git remote add origin https://github.com/YOUR_USERNAME/clawcasino-poker.git
