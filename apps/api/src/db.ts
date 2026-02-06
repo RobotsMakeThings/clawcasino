@@ -29,7 +29,11 @@ export function initDatabase(): void {
       total_profit REAL DEFAULT 0,
       biggest_pot_won REAL DEFAULT 0,
       hands_won INTEGER DEFAULT 0,
-      hands_played INTEGER DEFAULT 0
+      hands_played INTEGER DEFAULT 0,
+      avatar TEXT,
+      bio TEXT,
+      twitter TEXT,
+      discord TEXT
     )
   `);
 
@@ -102,16 +106,51 @@ export function initDatabase(): void {
       agent_id TEXT NOT NULL,
       type TEXT NOT NULL,
       amount REAL NOT NULL,
-      balance_after REAL NOT NULL,
-      solana_signature TEXT,
-      solana_address TEXT,
+      signature TEXT,
       status TEXT DEFAULT 'pending',
-      metadata TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      confirmed_at DATETIME,
+      completed_at DATETIME,
       FOREIGN KEY (agent_id) REFERENCES agents(id)
     )
   `);
+
+  // Wallet auth nonces (for Phantom login)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS wallet_nonces (
+      wallet_address TEXT PRIMARY KEY,
+      nonce TEXT NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // User sessions (JWT sessions)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      session_id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      wallet_address TEXT NOT NULL,
+      token TEXT NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (agent_id) REFERENCES agents(id)
+    )
+  `);
+
+  // Game stats for real-time updates
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS game_stats (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      total_wagered REAL DEFAULT 0,
+      total_hands INTEGER DEFAULT 0,
+      total_rake REAL DEFAULT 0,
+      agents_online INTEGER DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Initialize stats row
+  db.prepare('INSERT OR IGNORE INTO game_stats (id) VALUES (1)').run();
 
   console.log('✅ Database initialized');
 }
