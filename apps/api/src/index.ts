@@ -12,6 +12,9 @@ import { errorHandler } from './middleware/auth';
 import authRoutes from './routes/auth';
 import agentRoutes from './routes/agents';
 import walletRoutes from './routes/wallet';
+import pokerRoutes from './routes/poker';
+import coinflipRoutes from './routes/coinflip';
+import rpsRoutes from './routes/rps';
 
 dotenv.config();
 
@@ -28,6 +31,9 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/agent', agentRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/poker', pokerRoutes);
+app.use('/api/coinflip', coinflipRoutes);
+app.use('/api/rps', rpsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
