@@ -10,8 +10,10 @@ const defaultTables = [
   { id: 'nano', name: 'Nano Grind', smallBlind: 0.005, bigBlind: 0.01, minBuyin: 0.2, maxBuyin: 2 },
   { id: 'micro', name: 'Micro Stakes', smallBlind: 0.01, bigBlind: 0.02, minBuyin: 0.5, maxBuyin: 5 },
   { id: 'low', name: 'Low Stakes', smallBlind: 0.05, bigBlind: 0.10, minBuyin: 2, maxBuyin: 20 },
+  { id: 'medium', name: 'Medium Stakes', smallBlind: 0.10, bigBlind: 0.25, minBuyin: 5, maxBuyin: 50 },
   { id: 'mid', name: 'Mid Stakes', smallBlind: 0.25, bigBlind: 0.50, minBuyin: 10, maxBuyin: 100 },
   { id: 'high', name: 'High Roller', smallBlind: 1.00, bigBlind: 2.00, minBuyin: 50, maxBuyin: 500 },
+  { id: 'highstakes', name: 'High Stakes', smallBlind: 2.50, bigBlind: 5.00, minBuyin: 100, maxBuyin: 1000 },
   { id: 'degen', name: 'Degen Table', smallBlind: 5.00, bigBlind: 10.00, minBuyin: 200, maxBuyin: 2000 }
 ];
 
