@@ -15,6 +15,7 @@ import walletRoutes from './routes/wallet';
 import pokerRoutes from './routes/poker';
 import coinflipRoutes from './routes/coinflip';
 import rpsRoutes from './routes/rps';
+import adminRoutes from './routes/admin';
 
 dotenv.config();
 
@@ -34,6 +35,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/poker', pokerRoutes);
 app.use('/api/coinflip', coinflipRoutes);
 app.use('/api/rps', rpsRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

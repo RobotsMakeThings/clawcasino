@@ -27,6 +27,7 @@ export function initDatabase(): void {
       balance_usdc REAL DEFAULT 0,
       nonce TEXT,
       created_at INTEGER DEFAULT (unixepoch()),
+      last_active_at INTEGER DEFAULT (unixepoch()),
       games_played INTEGER DEFAULT 0,
       total_profit REAL DEFAULT 0
     )

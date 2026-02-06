@@ -35,6 +35,9 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
       return;
     }
 
+    // Update last active
+    db.prepare('UPDATE agents SET last_active_at = unixepoch() WHERE id = ?').run(decoded.agentId);
+
     req.agent = agent;
     next();
   } catch (error) {
@@ -43,7 +46,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 }
 
 // Admin auth middleware
-const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'clawcasino-admin-key-change-me';
 
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
