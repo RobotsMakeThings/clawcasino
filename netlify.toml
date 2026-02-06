@@ -3,6 +3,11 @@ base = "apps/web"
 publish = "public"
 command = "echo 'static deploy'"
 
+[[headers]]
+for = "/*"
+[headers.values]
+Cache-Control = "no-cache, no-store, must-revalidate"
+
 [[redirects]]
 from = "/_next/*"
 to = "/index.html"
