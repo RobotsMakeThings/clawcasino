@@ -1,4 +1,9 @@
 [build]
 base = "apps/web"
 publish = "public"
-command = "echo 'static site'"
+command = "echo 'static deploy'"
+
+[[redirects]]
+from = "/*"
+to = "/index.html"
+status = 200
