@@ -37,7 +37,11 @@ export function initDatabase(): void {
       rps_games INTEGER DEFAULT 0,
       rps_wins INTEGER DEFAULT 0,
       rps_losses INTEGER DEFAULT 0,
-      rps_profit REAL DEFAULT 0
+      rps_profit REAL DEFAULT 0,
+      rps_rounds_played INTEGER DEFAULT 0,
+      rps_rock_count INTEGER DEFAULT 0,
+      rps_paper_count INTEGER DEFAULT 0,
+      rps_scissors_count INTEGER DEFAULT 0
     )
   `);
 
@@ -150,6 +154,10 @@ export function initDatabase(): void {
       proof_data TEXT,
       created_at INTEGER DEFAULT (unixepoch()),
       completed_at INTEGER,
+      expires_at INTEGER,
+      phase_started_at INTEGER DEFAULT (unixepoch()),
+      forfeited_by TEXT,
+      forfeit_reason TEXT,
       FOREIGN KEY (creator_id) REFERENCES agents(id)
     )
   `);

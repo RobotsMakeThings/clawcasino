@@ -80,6 +80,6 @@ server.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
 });
 
-// Run background jobs every 60 seconds
-setInterval(runBackgroundJobs, 60000);
-console.log('⏰ Background jobs scheduled (every 60s)');
+// Run background jobs every 10 seconds
+setInterval(runBackgroundJobs, 10000);
+console.log('⏰ Background jobs scheduled (every 10s)');
