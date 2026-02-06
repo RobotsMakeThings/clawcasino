@@ -275,6 +275,35 @@ router.get('/audit', requireAdmin, (req, res) => {
   }
 });
 
+// Daily rake breakdown (last 30 days)
+router.get('/rake/daily', requireAdmin, (req, res) => {
+  try {
+    const days = parseInt(req.query.days as string) || 30;
+    const since = Math.floor(Date.now() / 1000) - (days * 24 * 60 * 60);
+
+    const dailyRake = db.prepare(`
+      SELECT 
+        date(datetime(created_at, 'unixepoch')) as date,
+        game_type,
+        SUM(amount) as rake,
+        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol,
+        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc,
+        COUNT(*) as games
+      FROM rake_log
+      WHERE created_at > ?
+      GROUP BY date, game_type
+      ORDER BY date DESC
+    `).all(since);
+
+    res.json({
+      days,
+      daily: dailyRake
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load daily rake' });
+  }
+});
+
 // Trigger background jobs
 router.post('/cron/run', requireAdmin, (req, res) => {
   try {

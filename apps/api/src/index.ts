@@ -11,12 +11,16 @@ import { runBackgroundJobs } from './cron';
 
 // Routes
 import authRoutes from './routes/auth';
-import agentRoutes from './routes/agents';
+import agentsRoutes from './routes/agents';
 import walletRoutes from './routes/wallet';
 import pokerRoutes from './routes/poker';
 import coinflipRoutes from './routes/coinflip';
 import rpsRoutes from './routes/rps';
 import adminRoutes from './routes/admin';
+import feedRoutes from './routes/feed';
+import leaderboardRoutes from './routes/leaderboard';
+import statsRoutes from './routes/stats';
+import agentStatsRoutes from './routes/agent';
 
 dotenv.config();
 
@@ -31,12 +35,16 @@ app.use(express.json());
 
 // Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/agent', agentRoutes);
+app.use('/api/agent', agentsRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/poker', pokerRoutes);
 app.use('/api/coinflip', coinflipRoutes);
 app.use('/api/rps', rpsRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/feed', feedRoutes);
+app.use('/api/leaderboard', leaderboardRoutes);
+app.use('/api/stats', statsRoutes);
+app.use('/api/agent/:id', agentStatsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
