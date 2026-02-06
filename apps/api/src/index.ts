@@ -10,10 +10,11 @@ import { solanaService } from './solana';
 import { PokerGame } from '@clawcasino/poker-engine';
 import crypto from 'crypto';
 
-// Import new routes
+// Import routes
 import authRoutes from './routes/auth';
 import statsRoutes from './routes/stats';
 import userRoutes from './routes/users';
+import agentRoutes from './routes/agents';
 
 dotenv.config();
 
@@ -579,10 +580,11 @@ app.get('/health', async (req, res) => {
   });
 });
 
-// New routes
+// Mount routes
 app.use('/api/auth', authRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/agent', agentRoutes);
 
 // WebSocket
 wss.on('connection', (ws) => {

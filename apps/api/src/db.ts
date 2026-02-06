@@ -14,26 +14,26 @@ const db = new Database(DB_PATH);
 
 // Initialize database schema
 export function initDatabase(): void {
-  // Agents table
+  // Agents table - wallet-based identity
   db.exec(`
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
-      username TEXT UNIQUE NOT NULL,
-      api_key TEXT UNIQUE NOT NULL,
-      balance REAL DEFAULT 0,
-      solana_address TEXT UNIQUE,
+      wallet_address TEXT UNIQUE NOT NULL,
+      display_name TEXT,
+      balance_sol REAL DEFAULT 0,
+      balance_usdc REAL DEFAULT 0,
+      nonce TEXT,
+      nonce_expires_at INTEGER,
+      jwt_issued_at INTEGER,
+      api_key TEXT UNIQUE,
       solana_seed TEXT,
-      deposit_slot_checked INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       games_played INTEGER DEFAULT 0,
       total_profit REAL DEFAULT 0,
       biggest_pot_won REAL DEFAULT 0,
       hands_won INTEGER DEFAULT 0,
       hands_played INTEGER DEFAULT 0,
-      avatar TEXT,
-      bio TEXT,
-      twitter TEXT,
-      discord TEXT
+      created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+      last_active_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
     )
   `);
 
@@ -48,7 +48,7 @@ export function initDatabase(): void {
       max_buyin REAL NOT NULL,
       max_players INTEGER DEFAULT 6,
       status TEXT DEFAULT 'active',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
     )
   `);
 
@@ -60,7 +60,7 @@ export function initDatabase(): void {
       seat INTEGER NOT NULL,
       chips REAL NOT NULL,
       status TEXT DEFAULT 'active',
-      joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      joined_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
       PRIMARY KEY (table_id, agent_id),
       FOREIGN KEY (table_id) REFERENCES tables(id),
       FOREIGN KEY (agent_id) REFERENCES agents(id)
@@ -77,8 +77,8 @@ export function initDatabase(): void {
       rake REAL DEFAULT 0,
       community_cards TEXT,
       winner_id TEXT,
-      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      finished_at DATETIME,
+      started_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+      finished_at INTEGER,
       FOREIGN KEY (table_id) REFERENCES tables(id),
       FOREIGN KEY (winner_id) REFERENCES agents(id)
     )
@@ -93,7 +93,7 @@ export function initDatabase(): void {
       action TEXT NOT NULL,
       amount REAL,
       phase TEXT NOT NULL,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      timestamp INTEGER DEFAULT (strftime('%s', 'now') * 1000),
       FOREIGN KEY (hand_id) REFERENCES hands(id),
       FOREIGN KEY (agent_id) REFERENCES agents(id)
     )
@@ -106,33 +106,11 @@ export function initDatabase(): void {
       agent_id TEXT NOT NULL,
       type TEXT NOT NULL,
       amount REAL NOT NULL,
+      token TEXT DEFAULT 'SOL',
       signature TEXT,
       status TEXT DEFAULT 'pending',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      completed_at DATETIME,
-      FOREIGN KEY (agent_id) REFERENCES agents(id)
-    )
-  `);
-
-  // Wallet auth nonces (for Phantom login)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS wallet_nonces (
-      wallet_address TEXT PRIMARY KEY,
-      nonce TEXT NOT NULL,
-      expires_at DATETIME NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // User sessions (JWT sessions)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS user_sessions (
-      session_id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL,
-      wallet_address TEXT NOT NULL,
-      token TEXT NOT NULL,
-      expires_at DATETIME NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+      completed_at INTEGER,
       FOREIGN KEY (agent_id) REFERENCES agents(id)
     )
   `);
@@ -141,16 +119,28 @@ export function initDatabase(): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS game_stats (
       id INTEGER PRIMARY KEY CHECK (id = 1),
-      total_wagered REAL DEFAULT 0,
+      total_wagered_sol REAL DEFAULT 0,
+      total_wagered_usdc REAL DEFAULT 0,
       total_hands INTEGER DEFAULT 0,
-      total_rake REAL DEFAULT 0,
-      agents_online INTEGER DEFAULT 0,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      total_rake_sol REAL DEFAULT 0,
+      total_rake_usdc REAL DEFAULT 0,
+      updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
     )
   `);
 
   // Initialize stats row
   db.prepare('INSERT OR IGNORE INTO game_stats (id) VALUES (1)').run();
+
+  // House wallet tracking
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS house_wallet (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      address TEXT,
+      balance_sol REAL DEFAULT 0,
+      total_rake_collected REAL DEFAULT 0,
+      updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+    )
+  `);
 
   console.log('✅ Database initialized');
 }
