@@ -15,6 +15,7 @@ import authRoutes from './routes/auth';
 import statsRoutes from './routes/stats';
 import userRoutes from './routes/users';
 import agentRoutes from './routes/agents';
+import walletRoutes from './routes/wallet';
 
 dotenv.config();
 
@@ -585,6 +586,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/agent', agentRoutes);
+app.use('/api/wallet', walletRoutes);
 
 // WebSocket
 wss.on('connection', (ws) => {

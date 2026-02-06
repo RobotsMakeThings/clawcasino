@@ -60,6 +60,43 @@ header{position:sticky;top:0;z-index:100;padding:16px 0;backdrop-filter:blur(20p
 @keyframes spin{to{transform:rotate(360deg)}}
 .close-modal{position:absolute;top:20px;right:20px;background:none;border:none;color:var(--text2);font-size:28px;cursor:pointer;width:40px;height:40px;display:flex;align-items:center;justify-content:center;border-radius:50%;transition:all .2s}
 .close-modal:hover{background:rgba(255,255,255,0.1);color:var(--text)}
+
+/* Wallet Modal Styles */
+.wallet-modal-content{max-width:450px;padding:32px}
+.wallet-tabs{display:flex;gap:8px;margin-bottom:24px;border-bottom:1px solid var(--border);padding-bottom:16px}
+.wallet-tab{flex:1;padding:12px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--text2);font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;transition:all .2s}
+.wallet-tab.active{background:var(--cyan);border-color:var(--cyan);color:var(--bg)}
+.wallet-tab:hover:not(.active){border-color:var(--border-h)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+.qr-container{background:#fff;padding:16px;border-radius:12px;margin-bottom:16px;display:flex;justify-content:center}
+.qr-code{width:180px;height:180px}
+.address-box{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.address-text{font-family:var(--mono);font-size:12px;word-break:break-all;flex:1;color:var(--text)}
+.copy-btn{background:var(--border);border:none;border-radius:6px;padding:8px 12px;color:var(--text);font-size:12px;cursor:pointer;transition:all .2s;white-space:nowrap}
+.copy-btn:hover{background:var(--border-h)}
+.deposit-info{font-size:12px;color:var(--text3);text-align:center;margin-top:8px}
+.withdraw-form{text-align:left}
+.form-group{margin-bottom:16px}
+.form-label{display:block;font-size:12px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px}
+.form-input{width:100%;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font);font-size:14px;transition:all .2s}
+.form-input:focus{outline:none;border-color:var(--cyan)}
+.form-select{width:100%;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font);font-size:14px;cursor:pointer}
+.balance-display{font-family:var(--mono);font-size:14px;color:var(--cyan);margin-top:4px}
+.withdraw-btn{width:100%;padding:14px;background:linear-gradient(135deg,var(--cyan),var(--purple));border:none;border-radius:10px;color:var(--bg);font-family:var(--font);font-size:16px;font-weight:700;cursor:pointer;transition:all .3s;margin-top:8px}
+.withdraw-btn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 10px 30px rgba(0,255,213,0.3)}
+.withdraw-btn:disabled{opacity:0.5;cursor:not-allowed}
+.tx-history{margin-top:24px;padding-top:24px;border-top:1px solid var(--border)}
+.tx-history h4{font-size:14px;margin-bottom:12px;color:var(--text2)}
+.tx-item{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05)}
+.tx-type{font-size:12px;font-weight:600}
+.tx-type.deposit{color:var(--green)}
+.tx-type.withdrawal{color:var(--red)}
+.tx-amount{font-family:var(--mono);font-size:13px}
+.tx-status{font-size:11px;color:var(--text3)}
+.alert{padding:12px 16px;border-radius:8px;margin-bottom:16px;font-size:13px}
+.alert-success{background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);color:var(--green)}
+.alert-error{background:rgba(255,45,85,0.1);border:1px solid rgba(255,45,85,0.3);color:var(--red)}
 </style>
 </head>
 <body>
@@ -82,6 +119,8 @@ header{position:sticky;top:0;z-index:100;padding:16px 0;backdrop-filter:blur(20p
           <div class="wallet-balance" id="walletBalance">-- SOL</div>
         </div>
         <div class="wallet-menu-item" id="viewProfile">View Profile</div>
+        <div class="wallet-menu-item" id="depositBtn">Deposit</div>
+        <div class="wallet-menu-item" id="withdrawBtn">Withdraw</div>
         <div class="wallet-menu-item" id="copyAddress">Copy Address</div>
         <div class="wallet-menu-item" id="disconnectWallet" style="color:var(--red)">Disconnect</div>
       </div>
@@ -122,6 +161,61 @@ header{position:sticky;top:0;z-index:100;padding:16px 0;backdrop-filter:blur(20p
     <button class="phantom-btn" id="phantomConnect">
       <span>🦊 Connect Phantom</span>
     </button>
+  </div>
+</div>
+
+<div class="modal" id="walletModal">
+  <button class="close-modal" id="closeWalletModal">×</button>
+  <div class="modal-content wallet-modal-content">
+    <div class="wallet-tabs">
+      <button class="wallet-tab active" data-tab="deposit">Deposit</button>
+      <button class="wallet-tab" data-tab="withdraw">Withdraw</button>
+    </div>
+    
+    <div class="tab-content active" id="depositTab">
+      <div class="qr-container">
+        <img class="qr-code" id="depositQR" src="" alt="Deposit QR Code">
+      </div>
+      <div class="address-box">
+        <span class="address-text" id="depositAddress">Loading...</span>
+        <button class="copy-btn" id="copyDepositAddress">Copy</button>
+      </div>
+      <p class="deposit-info">Send SOL or USDC to this address. Funds will be credited automatically.</p>
+      <p class="deposit-info">Min: 0.001 SOL / 1 USDC</p>
+    </div>
+    
+    <div class="tab-content" id="withdrawTab">
+      <form class="withdraw-form" id="withdrawForm">
+        <div class="form-group">
+          <label class="form-label">Currency</label>
+          <select class="form-select" id="withdrawCurrency">
+            <option value="SOL">SOL</option>
+            <option value="USDC">USDC</option>
+          </select>
+          <div class="balance-display" id="withdrawBalance">Balance: 0 SOL</div>
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label">Amount</label>
+          <input type="number" class="form-input" id="withdrawAmount" placeholder="0.00" step="0.001" min="0.001">
+          <div class="balance-display">Min: 0.01 SOL / 1 USDC</div>
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label">Destination Address</label>
+          <input type="text" class="form-input" id="withdrawAddress" placeholder="Enter Solana address">
+        </div>
+        
+        <div id="withdrawAlert"></div>
+        
+        <button type="submit" class="withdraw-btn" id="withdrawSubmit">Withdraw</button>
+      </form>
+    </div>
+    
+    <div class="tx-history" id="txHistory">
+      <h4>Recent Transactions</h4>
+      <div id="txList"></div>
+    </div>
   </div>
 </div>
 
@@ -296,12 +390,207 @@ async function loadStats() {
   }
 }
 
+// Wallet Modal Elements
+const walletModal = document.getElementById('walletModal');
+const closeWalletModal = document.getElementById('closeWalletModal');
+const depositBtn = document.getElementById('depositBtn');
+const withdrawBtn = document.getElementById('withdrawBtn');
+const walletTabs = document.querySelectorAll('.wallet-tab');
+const tabContents = document.querySelectorAll('.tab-content');
+const depositQR = document.getElementById('depositQR');
+const depositAddressEl = document.getElementById('depositAddress');
+const copyDepositBtn = document.getElementById('copyDepositAddress');
+const withdrawForm = document.getElementById('withdrawForm');
+const withdrawCurrency = document.getElementById('withdrawCurrency');
+const withdrawAmount = document.getElementById('withdrawAmount');
+const withdrawAddress = document.getElementById('withdrawAddress');
+const withdrawBalance = document.getElementById('withdrawBalance');
+const withdrawAlert = document.getElementById('withdrawAlert');
+const txList = document.getElementById('txList');
+
+// Wallet Tab Switching
+walletTabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    walletTabs.forEach(t => t.classList.remove('active'));
+    tabContents.forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab + 'Tab').classList.add('active');
+  });
+});
+
+// Load Wallet Data
+async function loadWalletData() {
+  if (!currentUser) return;
+  
+  try {
+    const token = localStorage.getItem('claw_token');
+    const res = await fetch(`${API_URL}/api/wallet`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await res.json();
+    
+    // Update balances
+    currentUser.balanceSol = data.balances.sol;
+    currentUser.balanceUsdc = data.balances.usdc;
+    updateUI();
+    
+    // Update deposit address
+    if (data.depositAddress) {
+      depositAddressEl.textContent = data.depositAddress;
+      depositQR.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${data.depositAddress}`;
+    }
+    
+    // Update withdraw balance display
+    updateWithdrawBalance();
+    
+    // Load transactions
+    loadTransactions(data.recentTransactions);
+  } catch (err) {
+    console.error('Failed to load wallet:', err);
+  }
+}
+
+// Update withdraw balance display
+function updateWithdrawBalance() {
+  const currency = withdrawCurrency.value;
+  const balance = currency === 'SOL' ? currentUser?.balanceSol : currentUser?.balanceUsdc;
+  withdrawBalance.textContent = `Balance: ${balance?.toFixed(4) || '0.0000'} ${currency}`;
+}
+
+// Load transactions
+function loadTransactions(transactions) {
+  if (!transactions || transactions.length === 0) {
+    txList.innerHTML = '<p style="color:var(--text3);font-size:12px;text-align:center;padding:16px 0">No recent transactions</p>';
+    return;
+  }
+  
+  txList.innerHTML = transactions.map(tx => `
+    <div class="tx-item">
+      <div>
+        <div class="tx-type ${tx.type}">${tx.type.toUpperCase()}</div>
+        <div class="tx-status">${tx.status}</div>
+      </div>
+      <div class="tx-amount ${tx.type === 'deposit' ? 'positive' : 'negative'}">
+        ${tx.type === 'deposit' ? '+' : '-'}${tx.amount.toFixed(4)} ${tx.currency}
+      </div>
+    </div>
+  `).join('');
+}
+
+// Handle Withdrawal
+withdrawForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  
+  const currency = withdrawCurrency.value;
+  const amount = parseFloat(withdrawAmount.value);
+  const destination = withdrawAddress.value.trim();
+  
+  if (!amount || amount <= 0) {
+    showAlert('Please enter a valid amount', 'error');
+    return;
+  }
+  
+  if (!destination) {
+    showAlert('Please enter a destination address', 'error');
+    return;
+  }
+  
+  const minAmount = currency === 'SOL' ? 0.01 : 1;
+  if (amount < minAmount) {
+    showAlert(`Minimum withdrawal is ${minAmount} ${currency}`, 'error');
+    return;
+  }
+  
+  const balance = currency === 'SOL' ? currentUser?.balanceSol : currentUser?.balanceUsdc;
+  if (amount > balance) {
+    showAlert('Insufficient balance', 'error');
+    return;
+  }
+  
+  try {
+    withdrawSubmit.disabled = true;
+    withdrawSubmit.textContent = 'Processing...';
+    
+    const token = localStorage.getItem('claw_token');
+    const res = await fetch(`${API_URL}/api/wallet/withdraw`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ currency, amount, destinationAddress: destination })
+    });
+    
+    const data = await res.json();
+    
+    if (data.success) {
+      showAlert(`Success! Tx: ${data.txSignature.slice(0, 16)}...`, 'success');
+      withdrawAmount.value = '';
+      withdrawAddress.value = '';
+      
+      // Refresh wallet data
+      setTimeout(loadWalletData, 2000);
+    } else {
+      showAlert(data.error || 'Withdrawal failed', 'error');
+    }
+  } catch (err) {
+    console.error('Withdrawal error:', err);
+    showAlert('Withdrawal failed. Please try again.', 'error');
+  } finally {
+    withdrawSubmit.disabled = false;
+    withdrawSubmit.textContent = 'Withdraw';
+  }
+});
+
+// Show alert
+function showAlert(message, type) {
+  withdrawAlert.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+  setTimeout(() => {
+    withdrawAlert.innerHTML = '';
+  }, 5000);
+}
+
+// Copy deposit address
+copyDepositBtn.addEventListener('click', () => {
+  const address = depositAddressEl.textContent;
+  navigator.clipboard.writeText(address);
+  copyDepositBtn.textContent = 'Copied!';
+  setTimeout(() => copyDepositBtn.textContent = 'Copy', 2000);
+});
+
+// Update balance when currency changes
+withdrawCurrency.addEventListener('change', updateWithdrawBalance);
+
 // Event Listeners
 walletBtn.addEventListener('click', () => {
   if (currentUser) {
     walletDropdown.classList.toggle('active');
   } else {
     connectModal.classList.add('active');
+  }
+});
+
+depositBtn.addEventListener('click', () => {
+  walletDropdown.classList.remove('active');
+  walletModal.classList.add('active');
+  walletTabs[0].click();
+  loadWalletData();
+});
+
+withdrawBtn.addEventListener('click', () => {
+  walletDropdown.classList.remove('active');
+  walletModal.classList.add('active');
+  walletTabs[1].click();
+  loadWalletData();
+});
+
+closeWalletModal.addEventListener('click', () => {
+  walletModal.classList.remove('active');
+});
+
+walletModal.addEventListener('click', (e) => {
+  if (e.target === walletModal) {
+    walletModal.classList.remove('active');
   }
 });
 

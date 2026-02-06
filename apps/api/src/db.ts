@@ -22,16 +22,24 @@ export function initDatabase(): void {
       display_name TEXT,
       balance_sol REAL DEFAULT 0,
       balance_usdc REAL DEFAULT 0,
+      
+      -- Deposit wallet (hot wallet sweep pattern)
+      deposit_address TEXT UNIQUE,
+      deposit_private_key TEXT, -- encrypted
+      
+      -- Auth
       nonce TEXT,
       nonce_expires_at INTEGER,
       jwt_issued_at INTEGER,
-      api_key TEXT UNIQUE,
-      solana_seed TEXT,
+      
+      -- Stats
       games_played INTEGER DEFAULT 0,
       total_profit REAL DEFAULT 0,
       biggest_pot_won REAL DEFAULT 0,
       hands_won INTEGER DEFAULT 0,
       hands_played INTEGER DEFAULT 0,
+      
+      -- Timestamps
       created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
       last_active_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
     )
@@ -52,7 +60,7 @@ export function initDatabase(): void {
     )
   `);
 
-  // Table players (current seated players)
+  // Table players
   db.exec(`
     CREATE TABLE IF NOT EXISTS table_players (
       table_id TEXT NOT NULL,
@@ -99,23 +107,52 @@ export function initDatabase(): void {
     )
   `);
 
-  // Transactions
+  // Transactions (deposits, withdrawals, game transactions)
   db.exec(`
     CREATE TABLE IF NOT EXISTS transactions (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
-      type TEXT NOT NULL,
+      type TEXT NOT NULL, -- 'deposit', 'withdrawal', 'win', 'loss', 'rake'
+      currency TEXT NOT NULL, -- 'SOL' or 'USDC'
       amount REAL NOT NULL,
-      token TEXT DEFAULT 'SOL',
-      signature TEXT,
-      status TEXT DEFAULT 'pending',
+      fee REAL DEFAULT 0,
+      
+      -- For blockchain transactions
+      tx_signature TEXT,
+      from_address TEXT,
+      to_address TEXT,
+      
+      -- Status tracking
+      status TEXT DEFAULT 'pending', -- 'pending', 'confirmed', 'failed'
+      confirmations INTEGER DEFAULT 0,
+      
+      -- Metadata
+      note TEXT,
       created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
-      completed_at INTEGER,
+      confirmed_at INTEGER,
+      
       FOREIGN KEY (agent_id) REFERENCES agents(id)
     )
   `);
 
-  // Game stats for real-time updates
+  // Create indexes for transactions
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_agent ON transactions(agent_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type)`);
+
+  // Withdrawal rate limiting
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS withdrawal_limits (
+      agent_id TEXT PRIMARY KEY,
+      hour_count INTEGER DEFAULT 0,
+      hour_reset_at INTEGER,
+      day_count INTEGER DEFAULT 0,
+      day_reset_at INTEGER,
+      FOREIGN KEY (agent_id) REFERENCES agents(id)
+    )
+  `);
+
+  // Game stats
   db.exec(`
     CREATE TABLE IF NOT EXISTS game_stats (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -127,18 +164,29 @@ export function initDatabase(): void {
       updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
     )
   `);
-
-  // Initialize stats row
   db.prepare('INSERT OR IGNORE INTO game_stats (id) VALUES (1)').run();
 
-  // House wallet tracking
+  // House wallet
   db.exec(`
     CREATE TABLE IF NOT EXISTS house_wallet (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       address TEXT,
+      private_key TEXT, -- encrypted
       balance_sol REAL DEFAULT 0,
-      total_rake_collected REAL DEFAULT 0,
+      balance_usdc REAL DEFAULT 0,
+      total_rake_sol REAL DEFAULT 0,
+      total_rake_usdc REAL DEFAULT 0,
       updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+    )
+  `);
+
+  // Deposit tracking (for sweep job)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deposit_tracking (
+      agent_id TEXT PRIMARY KEY,
+      last_checked_slot INTEGER DEFAULT 0,
+      last_sweep_at INTEGER,
+      FOREIGN KEY (agent_id) REFERENCES agents(id)
     )
   `);
 
