@@ -1,0 +1,33 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.production
+*.log
+data/
+*.db
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+temp/
+tmp/
+
+# OS
+Thumbs.db
+
+# Testing
+coverage/
+.nyc_output/
+
+# Build
+build/
+out/
+
+# Misc
+*.pem
+*.cert
+*.key
