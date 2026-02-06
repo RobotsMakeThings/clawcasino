@@ -4,8 +4,12 @@ import helmet from 'helmet';
 import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
+import { initDatabase } from './db';
 
 dotenv.config();
+
+// Initialize database (creates tables and seeds default data)
+initDatabase();
 
 const app = express();
 const server = createServer(app);
