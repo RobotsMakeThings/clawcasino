@@ -5,6 +5,7 @@ import { evaluateHand, HandEvaluation, compareHands } from './hand-evaluator';
 export type PlayerStatus = 'active' | 'folded' | 'all_in' | 'sitting_out';
 export type GamePhase = 'waiting' | 'preflop' | 'flop' | 'turn' | 'river' | 'showdown' | 'finished';
 export type PlayerAction = 'fold' | 'check' | 'call' | 'raise' | 'all_in';
+export type Currency = 'SOL' | 'USDC';
 
 export interface Player {
   id: string;
@@ -29,6 +30,7 @@ export interface HandResult {
   winners: { playerId: string; username: string; amount: number; hand: HandEvaluation }[];
   rake: number;
   totalPot: number;
+  reachedFlop: boolean;
 }
 
 export interface PokerGameState {
@@ -46,7 +48,58 @@ export interface PokerGameState {
   currentBet: number;
   deckHash: string;
   handNumber: number;
+  currency: Currency;
   timestamp: number;
+}
+
+// Industry-standard rake structure (matching PokerStars/GGPoker)
+export const RAKE_CONFIG = {
+  percentage: 0.05, // 5%
+  noFlopNoDrop: true, // ZERO rake if hand ends before flop
+  caps: {
+    // [blinds]: { numPlayers: cap }
+    '0.005/0.01': { 2: 0.01, 3: 0.02, 4: 0.02, 5: 0.03, 6: 0.03 },
+    '0.01/0.02': { 2: 0.02, 3: 0.04, 4: 0.04, 5: 0.05, 6: 0.05 },
+    '0.05/0.10': { 2: 0.10, 3: 0.15, 4: 0.15, 5: 0.25, 6: 0.25 },
+    '0.10/0.25': { 2: 0.25, 3: 0.50, 4: 0.50, 5: 0.75, 6: 0.75 },
+    '0.25/0.50': { 2: 0.50, 3: 1.00, 4: 1.00, 5: 1.50, 6: 1.50 },
+    '0.50/1.00': { 2: 0.75, 3: 1.50, 4: 1.50, 5: 2.00, 6: 2.00 },
+    '1.00/2.00': { 2: 1.00, 3: 2.00, 4: 2.00, 5: 3.00, 6: 3.00 },
+    '2.50/5.00': { 2: 1.50, 3: 2.50, 4: 2.50, 5: 3.50, 6: 3.50 },
+    '5.00/10.00': { 2: 2.00, 3: 3.00, 4: 3.00, 5: 5.00, 6: 5.00 },
+    // USDC caps
+    '0.25/0.50': { 2: 0.50, 3: 1.00, 4: 1.00, 5: 1.50, 6: 1.50 },
+    '0.50/1.00': { 2: 0.75, 3: 1.50, 4: 1.50, 5: 2.00, 6: 2.00 },
+    '1/2': { 2: 1.00, 3: 2.00, 4: 2.00, 5: 3.00, 6: 3.00 },
+    '2.50/5': { 2: 1.50, 3: 2.50, 4: 2.50, 5: 3.50, 6: 3.50 },
+    '5/10': { 2: 2.00, 3: 3.00, 4: 3.00, 5: 5.00, 6: 5.00 },
+  } as Record<string, Record<number, number>>
+};
+
+export function calculateRake(
+  potSize: number, 
+  blindLevel: string, 
+  numPlayers: number, 
+  reachedFlop: boolean
+): number {
+  // No flop no drop
+  if (!reachedFlop && RAKE_CONFIG.noFlopNoDrop) {
+    return 0;
+  }
+
+  // Calculate raw rake
+  const rawRake = potSize * RAKE_CONFIG.percentage;
+  
+  // Get cap for this blind level and player count
+  const playerCount = Math.min(numPlayers, 6);
+  const cap = RAKE_CONFIG.caps[blindLevel]?.[playerCount];
+  
+  // Apply cap if exists, otherwise use raw rake
+  if (cap !== undefined) {
+    return Math.min(rawRake, cap);
+  }
+  
+  return rawRake;
 }
 
 export class PokerGame {
@@ -68,23 +121,32 @@ export class PokerGame {
   private handNumber: number = 0;
   private actionTimer: NodeJS.Timeout | null = null;
   private handResults: HandResult | null = null;
+  private currency: Currency;
   private readonly ACTION_TIMEOUT = 30000; // 30 seconds
-  private readonly RAKE_PERCENTAGE = 0.05; // 5%
-  private readonly RAKE_CAP = 3; // max 3 SOL
 
   constructor(
     tableId: string,
     smallBlind: number,
     bigBlind: number,
     minBuyin: number,
-    maxBuyin: number
+    maxBuyin: number,
+    currency: Currency = 'SOL'
   ) {
     this.tableId = tableId;
     this.smallBlind = smallBlind;
     this.bigBlind = bigBlind;
     this.minBuyin = minBuyin;
     this.maxBuyin = maxBuyin;
+    this.currency = currency;
     this.deck = new Deck();
+  }
+
+  getCurrency(): Currency {
+    return this.currency;
+  }
+
+  getBlindLevel(): string {
+    return `${this.smallBlind}/${this.bigBlind}`;
   }
 
   // Player Management
@@ -94,7 +156,7 @@ export class PokerGame {
     }
 
     if (buyinAmount < this.minBuyin || buyinAmount > this.maxBuyin) {
-      return { success: false, error: `Buyin must be between ${this.minBuyin} and ${this.maxBuyin} SOL` };
+      return { success: false, error: `Buyin must be between ${this.minBuyin} and ${this.maxBuyin} ${this.currency}` };
     }
 
     if (this.seatedPlayers.length >= 6) {
@@ -103,21 +165,21 @@ export class PokerGame {
 
     // Find available seat
     if (seat === undefined) {
-      const occupiedSeats = new Set(this.seatedPlayers.map(p => p.seat));
+      const takenSeats = new Set(this.seatedPlayers.map(p => p.seat));
       for (let i = 0; i < 6; i++) {
-        if (!occupiedSeats.has(i)) {
+        if (!takenSeats.has(i)) {
           seat = i;
           break;
         }
       }
     }
 
-    if (seat === undefined || seat < 0 || seat >= 6) {
+    if (seat === undefined || seat < 0 || seat > 5) {
       return { success: false, error: 'Invalid seat' };
     }
 
     if (this.seatedPlayers.some(p => p.seat === seat)) {
-      return { success: false, error: 'Seat already taken' };
+      return { success: false, error: 'Seat is taken' };
     }
 
     const player: Player = {
@@ -126,7 +188,7 @@ export class PokerGame {
       seat,
       chips: buyinAmount,
       holeCards: [],
-      status: 'sitting_out',
+      status: 'active',
       currentBet: 0,
       totalBetsInHand: 0,
       folded: false,
@@ -140,45 +202,67 @@ export class PokerGame {
     return { success: true, player };
   }
 
-  leaveTable(playerId: string): { success: boolean; error?: string; cashoutAmount?: number } {
+  leaveTable(playerId: string): { success: boolean; error?: string; remainingChips?: number } {
     const player = this.players.get(playerId);
     if (!player) {
       return { success: false, error: 'Player not at table' };
     }
 
-    if (this.phase !== 'waiting' && this.phase !== 'finished' && player.status !== 'sitting_out') {
-      return { success: false, error: 'Cannot leave during active hand. Please wait for hand to finish or fold.' };
+    // Can't leave during active hand
+    if (this.phase !== 'waiting' && this.phase !== 'finished') {
+      // Mark as sitting out after current hand
+      player.status = 'sitting_out';
+      return { success: true, remainingChips: player.chips, message: 'Will leave after current hand' };
     }
 
-    const cashoutAmount = player.chips;
+    const remainingChips = player.chips;
     this.players.delete(playerId);
     this.seatedPlayers = this.seatedPlayers.filter(p => p.id !== playerId);
 
-    return { success: true, cashoutAmount };
+    return { success: true, remainingChips };
   }
 
-  // Hand Management
+  // Add chips (rebuy)
+  addChips(playerId: string, amount: number): { success: boolean; error?: string; newBalance?: number } {
+    const player = this.players.get(playerId);
+    if (!player) {
+      return { success: false, error: 'Player not at table' };
+    }
+
+    const newTotal = player.chips + amount;
+    if (newTotal > this.maxBuyin) {
+      return { success: false, error: `Cannot exceed max buyin of ${this.maxBuyin} ${this.currency}` };
+    }
+
+    player.chips += amount;
+    return { success: true, newBalance: player.chips };
+  }
+
+  // Start a new hand
   startHand(): { success: boolean; error?: string; state?: PokerGameState } {
     if (this.seatedPlayers.length < 2) {
       return { success: false, error: 'Need at least 2 players to start' };
     }
 
-    if (this.phase !== 'waiting' && this.phase !== 'finished') {
-      return { success: false, error: 'Hand already in progress' };
+    const activePlayers = this.getActivePlayersInOrder();
+    if (activePlayers.length < 2) {
+      return { success: false, error: 'Need at least 2 active players' };
     }
 
     // Reset for new hand
+    this.handNumber++;
+    this.handResults = null;
+    this.phase = 'waiting';
     this.communityCards = [];
     this.pots = [];
     this.currentBet = 0;
     this.lastRaise = 0;
-    this.handResults = null;
-    this.handNumber++;
 
-    // Reset players
+    // Reset player states
     for (const player of this.seatedPlayers) {
+      if (player.status === 'sitting_out') continue;
       player.holeCards = [];
-      player.status = player.chips > 0 ? 'active' : 'sitting_out';
+      player.status = 'active';
       player.currentBet = 0;
       player.totalBetsInHand = 0;
       player.lastAction = undefined;
@@ -186,16 +270,9 @@ export class PokerGame {
       player.allIn = false;
     }
 
-    const activePlayers = this.seatedPlayers.filter(p => p.status === 'active');
-    if (activePlayers.length < 2) {
-      return { success: false, error: 'Need at least 2 active players with chips' };
-    }
-
     // Move dealer button
-    this.dealerIndex = (this.dealerIndex + 1) % this.seatedPlayers.length;
-    while (this.seatedPlayers[this.dealerIndex].status === 'sitting_out') {
-      this.dealerIndex = (this.dealerIndex + 1) % this.seatedPlayers.length;
-    }
+    this.dealerIndex = (this.dealerIndex + 1) % activePlayers.length;
+    this.currentPlayerIndex = 0;
 
     // Deal cards
     this.deck.reset();
@@ -347,14 +424,19 @@ export class PokerGame {
     
     this.lastRaise = amount - this.currentBet;
     this.currentBet = amount;
+
     return true;
   }
 
   private handleAllIn(player: Player): boolean {
     const allInAmount = player.chips;
+    if (allInAmount <= 0) {
+      return false;
+    }
+
+    player.chips = 0;
     player.currentBet += allInAmount;
     player.totalBetsInHand += allInAmount;
-    player.chips = 0;
     player.allIn = true;
     player.status = 'all_in';
     player.lastAction = `went all-in for ${player.currentBet}`;
@@ -363,44 +445,36 @@ export class PokerGame {
       this.lastRaise = player.currentBet - this.currentBet;
       this.currentBet = player.currentBet;
     }
+
     return true;
   }
 
   private isBettingRoundComplete(): boolean {
-    const activePlayers = this.seatedPlayers.filter(p => 
-      p.status === 'active' || p.status === 'all_in'
-    );
-
-    // Check if only one player remains (everyone else folded)
-    const nonFoldedPlayers = activePlayers.filter(p => !p.folded);
-    if (nonFoldedPlayers.length === 1) {
-      return true;
-    }
-
-    // Check if all active players have matched the current bet or are all-in
-    return activePlayers.every(p => 
-      p.folded || 
-      p.allIn || 
-      p.currentBet === this.currentBet
-    );
+    const activePlayers = this.getActivePlayersInOrder().filter(p => !p.folded);
+    
+    // All players must have acted and bets must be equal
+    return activePlayers.every(p => {
+      if (p.allIn) return true;
+      return p.currentBet === this.currentBet && p.lastAction !== undefined;
+    });
   }
 
   private advancePhase(): void {
-    // Collect bets into pot
+    // Collect bets into pot(s)
     this.collectBets();
 
     switch (this.phase) {
       case 'preflop':
-        this.communityCards.push(...this.deck.dealMultiple(3));
         this.phase = 'flop';
+        this.communityCards = this.deck.dealMultiple(3);
         break;
       case 'flop':
-        this.communityCards.push(this.deck.deal());
         this.phase = 'turn';
+        this.communityCards.push(...this.deck.dealMultiple(1));
         break;
       case 'turn':
-        this.communityCards.push(this.deck.deal());
         this.phase = 'river';
+        this.communityCards.push(...this.deck.dealMultiple(1));
         break;
       case 'river':
         this.phase = 'showdown';
@@ -409,54 +483,59 @@ export class PokerGame {
     }
 
     // Reset for next betting round
-    this.resetBets();
+    this.currentBet = 0;
+    this.lastRaise = this.bigBlind;
+    
+    for (const player of this.seatedPlayers) {
+      player.currentBet = 0;
+      player.lastAction = undefined;
+    }
+
+    this.currentPlayerIndex = 0;
     this.setNextPlayerToAct();
     this.startActionTimer();
   }
 
   private collectBets(): void {
-    const activePlayers = this.seatedPlayers.filter(p => !p.folded);
+    const activePlayers = this.getActivePlayersInOrder().filter(p => !p.folded);
     
-    // Group players by their total contribution to create side pots
-    const contributions = activePlayers.map(p => ({
-      playerId: p.id,
-      amount: p.totalBetsInHand
-    })).sort((a, b) => a.amount - b.amount);
-
-    let previousAmount = 0;
-    for (const contribution of contributions) {
-      if (contribution.amount > previousAmount) {
-        const potAmount = (contribution.amount - previousAmount) * 
-          contributions.filter(c => c.amount >= contribution.amount).length;
-        
-        this.pots.push({
-          amount: potAmount,
-          eligiblePlayers: contributions
-            .filter(c => c.amount >= contribution.amount)
-            .map(c => c.playerId)
-        });
-        
-        previousAmount = contribution.amount;
+    // Group players by their bet amount for side pots
+    const betGroups = new Map<number, Player[]>();
+    
+    for (const player of activePlayers) {
+      const bets = player.totalBetsInHand;
+      if (!betGroups.has(bets)) {
+        betGroups.set(bets, []);
       }
+      betGroups.get(bets)!.push(player);
     }
-  }
 
-  private resetBets(): void {
-    this.currentBet = 0;
-    this.lastRaise = 0;
-    for (const player of this.seatedPlayers) {
-      player.currentBet = 0;
+    // Create pots
+    const sortedBets = Array.from(betGroups.keys()).sort((a, b) => a - b);
+    let previousBet = 0;
+
+    for (const bet of sortedBets) {
+      const playersAtThisLevel = betGroups.get(bet)!;
+      const potAmount = (bet - previousBet) * activePlayers.length;
+      
+      this.pots.push({
+        amount: potAmount,
+        eligiblePlayers: activePlayers.filter(p => p.totalBetsInHand >= bet).map(p => p.id)
+      });
+
+      previousBet = bet;
     }
   }
 
   private resolveHand(): void {
     const nonFoldedPlayers = this.seatedPlayers.filter(p => !p.folded);
+    const reachedFlop = this.phase === 'showdown' && this.communityCards.length >= 3;
     
     if (nonFoldedPlayers.length === 1) {
       // Everyone else folded, single winner
       const winner = nonFoldedPlayers[0];
       const totalPot = this.pots.reduce((sum, pot) => sum + pot.amount, 0);
-      const rake = Math.min(totalPot * this.RAKE_PERCENTAGE, this.RAKE_CAP);
+      const rake = calculateRake(totalPot, this.getBlindLevel(), this.seatedPlayers.length, reachedFlop);
       const winnerAmount = totalPot - rake;
       
       winner.chips += winnerAmount;
@@ -469,7 +548,8 @@ export class PokerGame {
           hand: evaluateHand([...winner.holeCards, ...this.communityCards])
         }],
         rake,
-        totalPot
+        totalPot,
+        reachedFlop
       };
     } else {
       // Showdown - evaluate all hands
@@ -490,7 +570,7 @@ export class PokerGame {
         const potWinners = winners.filter(w => pot.eligiblePlayers.includes(w.player.id));
         if (potWinners.length === 0) continue;
 
-        const potRake = Math.min(pot.amount * this.RAKE_PERCENTAGE, this.RAKE_CAP);
+        const potRake = calculateRake(pot.amount, this.getBlindLevel(), this.seatedPlayers.length, reachedFlop);
         const distributableAmount = pot.amount - potRake;
         const sharePerWinner = distributableAmount / potWinners.length;
         totalRake += potRake;
@@ -516,11 +596,16 @@ export class PokerGame {
       this.handResults = {
         winners: results,
         rake: totalRake,
-        totalPot
+        totalPot,
+        reachedFlop
       };
     }
 
     this.phase = 'finished';
+  }
+
+  getHandResults(): HandResult | null {
+    return this.handResults;
   }
 
   private getActivePlayersInOrder(): Player[] {
@@ -532,7 +617,7 @@ export class PokerGame {
     
     // Find first player after dealer for preflop
     if (this.phase === 'preflop' && this.currentPlayerIndex === 0) {
-      this.currentPlayerIndex = 2 % activePlayers.length; // First to act after big blind
+      this.currentPlayerIndex = 2 % activePlayers.length;
       return;
     }
 
@@ -563,7 +648,6 @@ export class PokerGame {
     const player = activePlayers[this.currentPlayerIndex];
     
     if (player) {
-      // Auto-fold on timeout
       this.handleFold(player);
       
       if (this.isBettingRoundComplete()) {
@@ -582,7 +666,6 @@ export class PokerGame {
       phase: this.phase,
       players: this.seatedPlayers.map(p => ({
         ...p,
-        // Hide hole cards unless it's for the specific player
         holeCards: p.id === forPlayerId ? p.holeCards : []
       })),
       communityCards: this.communityCards,
@@ -596,59 +679,28 @@ export class PokerGame {
       currentBet: this.currentBet,
       deckHash: this.deck.getHash(),
       handNumber: this.handNumber,
+      currency: this.currency,
       timestamp: Date.now()
     };
   }
 
-  getPlayerView(playerId: string): { state: PokerGameState; holeCards: Card[]; availableActions: PlayerAction[]; toCall: number } | null {
-    const player = this.players.get(playerId);
-    if (!player) return null;
-
-    const state = this.getState(playerId);
-    const availableActions: PlayerAction[] = [];
-    const toCall = this.currentBet - player.currentBet;
-
-    if (this.phase !== 'waiting' && this.phase !== 'finished' && player.status === 'active') {
-      availableActions.push('fold');
-      
-      if (toCall === 0) {
-        availableActions.push('check');
-      }
-      
-      if (toCall > 0 && player.chips >= toCall) {
-        availableActions.push('call');
-      }
-      
-      const minRaise = this.currentBet + this.lastRaise;
-      if (player.chips > toCall) {
-        availableActions.push('raise');
-      }
-      
-      if (player.chips > 0) {
-        availableActions.push('all_in');
-      }
-    }
-
-    return {
-      state,
-      holeCards: player.holeCards,
-      availableActions,
-      toCall
-    };
+  getPlayers(): Player[] {
+    return this.seatedPlayers;
   }
 
-  getHandResults(): HandResult | null {
-    return this.handResults;
+  getPlayer(playerId: string): Player | undefined {
+    return this.players.get(playerId);
   }
 
-  getTableInfo(): { id: string; smallBlind: number; bigBlind: number; minBuyin: number; maxBuyin: number; playerCount: number } {
-    return {
-      id: this.tableId,
-      smallBlind: this.smallBlind,
-      bigBlind: this.bigBlind,
-      minBuyin: this.minBuyin,
-      maxBuyin: this.maxBuyin,
-      playerCount: this.seatedPlayers.length
-    };
+  getPhase(): GamePhase {
+    return this.phase;
+  }
+
+  getMinBuyin(): number {
+    return this.minBuyin;
+  }
+
+  getMaxBuyin(): number {
+    return this.maxBuyin;
   }
 }

@@ -16,6 +16,7 @@ import statsRoutes from './routes/stats';
 import userRoutes from './routes/users';
 import agentRoutes from './routes/agents';
 import walletRoutes from './routes/wallet';
+import tableRoutes, { initTables } from './routes/tables';
 
 dotenv.config();
 
@@ -587,6 +588,7 @@ app.use('/api/stats', statsRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/agent', agentRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/tables', tableRoutes);
 
 // WebSocket
 wss.on('connection', (ws) => {
@@ -608,6 +610,7 @@ wss.on('connection', (ws) => {
 initDatabase();
 loadAgents();
 initDefaultTables();
+initTables();
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, async () => {
