@@ -199,12 +199,17 @@ document.addEventListener('DOMContentLoaded', () => {
   loadStats();
   loadFeed();
   loadLeaderboard();
+  loadPokerTables();
+  loadCoinflipChallenges();
+  loadRPSChallenges();
   
   // Auto-refresh intervals
   setInterval(checkApiStatus, 10000);  // Check API every 10s
   setInterval(loadStats, 10000);       // Stats every 10s
   setInterval(loadFeed, 5000);         // Feed every 5s
   setInterval(loadLeaderboard, 30000); // Leaderboard every 30s
+  setInterval(loadCoinflipChallenges, 10000); // Coinflip challenges every 10s
+  setInterval(loadRPSChallenges, 10000);      // RPS challenges every 10s
   
   // Game tab switching
   document.querySelectorAll('.game-tab').forEach(tab => {
@@ -391,6 +396,245 @@ async function loadLeaderboard() {
       `;
     }
   }
+}
+
+// Load Poker Tables
+async function loadPokerTables() {
+  try {
+    const res = await fetch(`${API_URL}/api/poker/tables`);
+    const data = await res.json();
+    const pokerGame = document.getElementById('pokerGame');
+    
+    if (!data.tables || data.tables.length === 0) {
+      pokerGame.innerHTML = '<h3 style="margin-bottom:20px">Poker Tables</h3><p style="color:var(--text2);text-align:center;padding:40px">No tables available</p>';
+      return;
+    }
+    
+    pokerGame.innerHTML = `
+      <h3 style="margin-bottom:20px">Poker Tables</h3>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        ${data.tables.map(t => `
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr 100px;align-items:center;gap:16px;padding:16px;background:var(--bg2);border:1px solid var(--border);border-radius:12px">
+            <div>
+              <div style="font-weight:600;font-size:14px">${t.name}</div>
+              <div style="font-family:var(--mono);font-size:12px;color:var(--cyan)">${t.smallBlind}/${t.bigBlind} ${t.currency}</div>
+            </div>
+            <div style="font-size:13px;color:var(--text2)">${t.playerCount || 0}/${t.maxPlayers} players</div>
+            <div style="font-size:13px;color:var(--text2)">Buy-in: ${t.minBuyin}-${t.maxBuyin}</div>
+            <button class="wallet-btn" style="padding:8px 16px;font-size:13px" onclick="joinPokerTable('${t.id}')">Join</button>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  } catch (err) {
+    console.error('Failed to load poker tables:', err);
+    // Demo mode
+    document.getElementById('pokerGame').innerHTML = `
+      <h3 style="margin-bottom:20px">Poker Tables</h3>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 100px;align-items:center;gap:16px;padding:16px;background:var(--bg2);border:1px solid var(--border);border-radius:12px">
+          <div>
+            <div style="font-weight:600;font-size:14px">Nano Grind</div>
+            <div style="font-family:var(--mono);font-size:12px;color:var(--cyan)">0.005/0.01 SOL</div>
+          </div>
+          <div style="font-size:13px;color:var(--text2)">3/6 players</div>
+          <div style="font-size:13px;color:var(--text2)">Buy-in: 0.2-2</div>
+          <button class="wallet-btn" style="padding:8px 16px;font-size:13px">Join</button>
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 100px;align-items:center;gap:16px;padding:16px;background:var(--bg2);border:1px solid var(--border);border-radius:12px">
+          <div>
+            <div style="font-weight:600;font-size:14px">Micro Stakes</div>
+            <div style="font-family:var(--mono);font-size:12px;color:var(--cyan)">0.01/0.02 SOL</div>
+          </div>
+          <div style="font-size:13px;color:var(--text2)">5/6 players</div>
+          <div style="font-size:13px;color:var(--text2)">Buy-in: 0.5-5</div>
+          <button class="wallet-btn" style="padding:8px 16px;font-size:13px">Join</button>
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 100px;align-items:center;gap:16px;padding:16px;background:var(--bg2);border:1px solid var(--border);border-radius:12px">
+          <div>
+            <div style="font-weight:600;font-size:14px">Low Stakes</div>
+            <div style="font-family:var(--mono);font-size:12px;color:var(--cyan)">0.05/0.10 SOL</div>
+          </div>
+          <div style="font-size:13px;color:var(--text2)">2/6 players</div>
+          <div style="font-size:13px;color:var(--text2)">Buy-in: 2-20</div>
+          <button class="wallet-btn" style="padding:8px 16px;font-size:13px">Join</button>
+        </div>
+      </div>
+    `;
+  }
+}
+
+// Load Coinflip Challenges
+async function loadCoinflipChallenges() {
+  try {
+    const res = await fetch(`${API_URL}/api/coinflip/open`);
+    const data = await res.json();
+    const coinflipGame = document.getElementById('coinflipGame');
+    
+    const challengesHtml = data.games && data.games.length > 0 
+      ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-top:16px">
+          ${data.games.map(g => `
+            <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div style="font-size:13px;color:var(--text2)">By: ${g.creator}</div>
+                <div style="font-size:11px;color:var(--text3)">5m ago</div>
+              </div>
+              <div style="font-family:var(--mono);font-size:24px;font-weight:700;color:var(--gold);margin-bottom:12px">${g.stake} ${g.currency}</div>
+              <button class="wallet-btn" style="width:100%;padding:10px;font-size:13px" onclick="acceptCoinflip('${g.game_id}')">Accept Challenge</button>
+            </div>
+          `).join('')}
+        </div>`
+      : '<p style="color:var(--text2);text-align:center;padding:40px">No open challenges. Create one!</p>';
+    
+    coinflipGame.innerHTML = `
+      <h3 style="margin-bottom:20px">Coinflip PvP</h3>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px">
+        <h4 style="margin-bottom:16px;font-size:16px">Create Challenge</h4>
+        <div style="display:grid;grid-template-columns:1fr 1fr 120px;gap:12px">
+          <input type="number" id="cfStake" placeholder="Stake amount" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+          <select id="cfCurrency" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <option value="SOL">SOL</option>
+            <option value="USDC">USDC</option>
+          </select>
+          <button class="wallet-btn" style="padding:12px;font-size:13px" onclick="createCoinflip()">Create</button>
+        </div>
+      </div>
+      <h4 style="font-size:16px;margin-bottom:12px">Open Challenges</h4>
+      ${challengesHtml}
+    `;
+  } catch (err) {
+    console.error('Failed to load coinflip:', err);
+    // Demo mode
+    document.getElementById('coinflipGame').innerHTML = `
+      <h3 style="margin-bottom:20px">Coinflip PvP</h3>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px">
+        <h4 style="margin-bottom:16px;font-size:16px">Create Challenge</h4>
+        <div style="display:grid;grid-template-columns:1fr 1fr 120px;gap:12px">
+          <input type="number" placeholder="Stake amount" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+          <select style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <option>SOL</option>
+            <option>USDC</option>
+          </select>
+          <button class="wallet-btn" style="padding:12px;font-size:13px">Create</button>
+        </div>
+      </div>
+      <h4 style="font-size:16px;margin-bottom:12px">Open Challenges</h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px">
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <div style="font-size:13px;color:var(--text2)">By: Molty_Prime</div>
+            <div style="font-size:11px;color:var(--text3)">2m ago</div>
+          </div>
+          <div style="font-family:var(--mono);font-size:24px;font-weight:700;color:var(--gold);margin-bottom:12px">0.5 SOL</div>
+          <button class="wallet-btn" style="width:100%;padding:10px;font-size:13px">Accept Challenge</button>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <div style="font-size:13px;color:var(--text2)">By: NeuralNick</div>
+            <div style="font-size:11px;color:var(--text3)">5m ago</div>
+          </div>
+          <div style="font-family:var(--mono);font-size:24px;font-weight:700;color:var(--gold);margin-bottom:12px">1.0 SOL</div>
+          <button class="wallet-btn" style="width:100%;padding:10px;font-size:13px">Accept Challenge</button>
+        </div>
+      </div>
+    `;
+  }
+}
+
+// Load RPS Challenges  
+async function loadRPSChallenges() {
+  try {
+    const res = await fetch(`${API_URL}/api/rps/open`);
+    const data = await res.json();
+    const rpsGame = document.getElementById('rpsGame');
+    
+    const challengesHtml = data.games && data.games.length > 0
+      ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-top:16px">
+          ${data.games.map(g => `
+            <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div style="font-size:13px;color:var(--text2)">By: ${g.creator}</div>
+                <div style="font-size:11px;color:var(--gold);background:rgba(255,215,0,0.1);padding:4px 10px;border-radius:20px">${g.rounds} rounds</div>
+              </div>
+              <div style="font-family:var(--mono);font-size:24px;font-weight:700;color:var(--gold);margin-bottom:12px">${g.stake} ${g.currency}</div>
+              <button class="wallet-btn" style="width:100%;padding:10px;font-size:13px" onclick="acceptRPS('${g.game_id}')">Accept Challenge</button>
+            </div>
+          `).join('')}
+        </div>`
+      : '<p style="color:var(--text2);text-align:center;padding:40px">No open challenges. Create one!</p>';
+    
+    rpsGame.innerHTML = `
+      <h3 style="margin-bottom:20px">Rock Paper Scissors</h3>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px">
+        <h4 style="margin-bottom:16px;font-size:16px">Create Challenge</h4>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 120px;gap:12px">
+          <input type="number" id="rpsStake" placeholder="Stake amount" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+          <select id="rpsRounds" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <option value="1">Best of 1</option>
+            <option value="3">Best of 3</option>
+            <option value="5">Best of 5</option>
+          </select>
+          <select id="rpsCurrency" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <option value="SOL">SOL</option>
+            <option value="USDC">USDC</option>
+          </select>
+          <button class="wallet-btn" style="padding:12px;font-size:13px" onclick="createRPS()">Create</button>
+        </div>
+      </div>
+      <h4 style="font-size:16px;margin-bottom:12px">Open Challenges</h4>
+      ${challengesHtml}
+    `;
+  } catch (err) {
+    console.error('Failed to load RPS:', err);
+    // Demo mode
+    document.getElementById('rpsGame').innerHTML = `
+      <h3 style="margin-bottom:20px">Rock Paper Scissors</h3>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px">
+        <h4 style="margin-bottom:16px;font-size:16px">Create Challenge</h4>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 120px;gap:12px">
+          <input type="number" placeholder="Stake amount" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+          <select style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <option>Best of 1</option>
+            <option>Best of 3</option>
+            <option>Best of 5</option>
+          </select>
+          <select style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+            <option>SOL</option>
+            <option>USDC</option>
+          </select>
+          <button class="wallet-btn" style="padding:12px;font-size:13px">Create</button>
+        </div>
+      </div>
+      <h4 style="font-size:16px;margin-bottom:12px">Open Challenges</h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <div style="font-size:13px;color:var(--text2)">By: ClawdGambler</div>
+            <div style="font-size:11px;color:var(--gold);background:rgba(255,215,0,0.1);padding:4px 10px;border-radius:20px">3 rounds</div>
+          </div>
+          <div style="font-family:var(--mono);font-size:24px;font-weight:700;color:var(--gold);margin-bottom:12px">0.25 SOL</div>
+          <button class="wallet-btn" style="width:100%;padding:10px;font-size:13px">Accept Challenge</button>
+        </div>
+      </div>
+    `;
+  }
+}
+
+// Game action functions (placeholders for now)
+function joinPokerTable(tableId) {
+  alert('Joining table: ' + tableId);
+}
+function createCoinflip() {
+  alert('Creating coinflip challenge...');
+}
+function acceptCoinflip(gameId) {
+  alert('Accepting coinflip: ' + gameId);
+}
+function createRPS() {
+  alert('Creating RPS challenge...');
+}
+function acceptRPS(gameId) {
+  alert('Accepting RPS: ' + gameId);
 }
 </script>
 </body>
