@@ -196,4 +196,82 @@ router.get('/rake/by-game', requireAdmin, (req, res) => {
   }
 });
 
+// Math invariant audit
+router.get('/audit', requireAdmin, (req, res) => {
+  try {
+    // total_money_deposited = sum(all_agent_balances) + sum(all_chips_on_tables) + sum(all_rake_collected) + sum(all_withdrawals)
+    
+    // 1. Sum all agent balances (SOL and USDC)
+    const agentBalances = db.prepare(`
+      SELECT SUM(balance_sol) as sol, SUM(balance_usdc) as usdc FROM agents
+    `).get() as any;
+
+    // 2. Sum all chips on tables
+    const tableBalances = db.prepare(`
+      SELECT SUM(chips) as chips FROM poker_players
+    `).get() as any;
+
+    // 3. Sum all rake collected
+    const rake = db.prepare(`
+      SELECT 
+        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol_rake,
+        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc_rake
+      FROM rake_log
+    `).get() as any;
+
+    // 4. Sum all deposits (in)
+    const deposits = db.prepare(`
+      SELECT 
+        SUM(CASE WHEN currency = 'SOL' AND amount > 0 THEN amount ELSE 0 END) as sol_deposits,
+        SUM(CASE WHEN currency = 'USDC' AND amount > 0 THEN amount ELSE 0 END) as usdc_deposits
+      FROM transactions
+      WHERE type = 'deposit'
+    `).get() as any;
+
+    // 5. Sum all withdrawals (out)
+    const withdrawals = db.prepare(`
+      SELECT 
+        SUM(CASE WHEN currency = 'SOL' AND amount > 0 THEN amount ELSE 0 END) as sol_withdrawals,
+        SUM(CASE WHEN currency = 'USDC' AND amount > 0 THEN amount ELSE 0 END) as usdc_withdrawals
+      FROM transactions
+      WHERE type = 'withdrawal'
+    `).get() as any;
+
+    // Calculate expected balance
+    const solExpected = (deposits.sol_deposits || 0) - (withdrawals.sol_withdrawals || 0);
+    const usdcExpected = (deposits.usdc_deposits || 0) - (withdrawals.usdc_withdrawals || 0);
+
+    // Calculate actual balance (held by system)
+    const solActual = (agentBalances.sol || 0) + (tableBalances.chips || 0) + (rake.sol_rake || 0);
+    const usdcActual = (agentBalances.usdc || 0) + (rake.usdc_rake || 0); // USDC not used for poker chips yet
+
+    res.json({
+      audit: {
+        sol: {
+          expected: solExpected,
+          actual: solActual,
+          difference: solActual - solExpected,
+          balanced: Math.abs(solActual - solExpected) < 0.0001
+        },
+        usdc: {
+          expected: usdcExpected,
+          actual: usdcActual,
+          difference: usdcActual - usdcExpected,
+          balanced: Math.abs(usdcActual - usdcExpected) < 0.0001
+        }
+      },
+      breakdown: {
+        agentBalances: { sol: agentBalances.sol || 0, usdc: agentBalances.usdc || 0 },
+        tableBalances: { chips: tableBalances.chips || 0 },
+        rakeCollected: { sol: rake.sol_rake || 0, usdc: rake.usdc_rake || 0 },
+        deposits: { sol: deposits.sol_deposits || 0, usdc: deposits.usdc_deposits || 0 },
+        withdrawals: { sol: withdrawals.sol_withdrawals || 0, usdc: withdrawals.usdc_withdrawals || 0 }
+      },
+      passed: Math.abs(solActual - solExpected) < 0.0001 && Math.abs(usdcActual - usdcExpected) < 0.0001
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Audit failed' });
+  }
+});
+
 export default router;

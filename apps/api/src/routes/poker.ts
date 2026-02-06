@@ -1,313 +1,287 @@
 import { Router } from 'express';
-import { requireAuth } from '../../middleware/auth';
-import { db } from '../../db';
-import crypto from 'crypto';
-import { RAKE_CONFIG } from './types';
-import { createDeck, evaluateHand } from './cards';
+import { requireAuth } from '../middleware/auth';
+import { db } from '../db';
+import { pokerEngine, RAKE_CONFIG } from '../poker-engine';
 
 const router = Router();
 
-// Active games store
-const games = new Map<string, any>();
+// Initialize default tables
+const defaultTables = [
+  { id: 'nano', name: 'Nano Grind', smallBlind: 0.005, bigBlind: 0.01, minBuyin: 0.2, maxBuyin: 2 },
+  { id: 'micro', name: 'Micro Stakes', smallBlind: 0.01, bigBlind: 0.02, minBuyin: 0.5, maxBuyin: 5 },
+  { id: 'low', name: 'Low Stakes', smallBlind: 0.05, bigBlind: 0.10, minBuyin: 2, maxBuyin: 20 },
+  { id: 'mid', name: 'Mid Stakes', smallBlind: 0.25, bigBlind: 0.50, minBuyin: 10, maxBuyin: 100 },
+  { id: 'high', name: 'High Roller', smallBlind: 1.00, bigBlind: 2.00, minBuyin: 50, maxBuyin: 500 },
+  { id: 'degen', name: 'Degen Table', smallBlind: 5.00, bigBlind: 10.00, minBuyin: 200, maxBuyin: 2000 }
+];
 
-// Get all tables
+// Create tables on startup
+for (const table of defaultTables) {
+  pokerEngine.createTable({
+    ...table,
+    maxPlayers: 6,
+    currency: 'SOL'
+  });
+}
+
+// List all tables
 router.get('/tables', (req, res) => {
-  const tables = db.prepare('SELECT * FROM poker_tables').all();
+  const tables = pokerEngine.getAllTables();
   
-  // Add player counts
-  const tablesWithCounts = (tables as any[]).map(table => {
-    const playerCount = db.prepare('SELECT COUNT(*) as count FROM poker_players WHERE table_id = ?').get(table.id) as any;
+  const tableData = tables.map(table => {
+    // Get average pot from DB
+    const avgPot = db.prepare(`
+      SELECT AVG(pot) as avg FROM poker_hands 
+      WHERE table_id = ? AND finished_at > unixepoch() - 86400
+    `).get(table.config.id) as any;
+
     return {
-      ...table,
-      player_count: playerCount.count
+      id: table.config.id,
+      name: table.config.name,
+      smallBlind: table.config.smallBlind,
+      bigBlind: table.config.bigBlind,
+      minBuyin: table.config.minBuyin,
+      maxBuyin: table.config.maxBuyin,
+      playerCount: table.players.length,
+      avgPot: avgPot?.avg || 0,
+      currency: table.config.currency,
+      handInProgress: table.handInProgress
     };
   });
-  
-  res.json({ tables: tablesWithCounts });
+
+  res.json({ tables: tableData });
 });
 
-// Join table (buy in)
+// Get specific table
+router.get('/tables/:tableId', (req, res) => {
+  const { tableId } = req.params;
+  const state = pokerEngine.getTableState(tableId);
+
+  if (!state) {
+    res.status(404).json({ error: 'table_not_found', message: 'Table not found' });
+    return;
+  }
+
+  res.json(state);
+});
+
+// Get state for requesting agent
+router.get('/tables/:tableId/state', requireAuth, (req, res) => {
+  const { tableId } = req.params;
+  const agentId = req.agent.id;
+  
+  const state = pokerEngine.getTableState(tableId, agentId);
+
+  if (!state) {
+    res.status(404).json({ error: 'table_not_found', message: 'Table not found' });
+    return;
+  }
+
+  // Calculate available actions
+  let availableActions: string[] = [];
+  
+  if (state.hand) {
+    const currentPlayer = state.hand.players.find((p: any) => p.agentId === agentId);
+    const isCurrentTurn = state.hand.currentPlayer === agentId;
+    
+    if (isCurrentTurn && currentPlayer && currentPlayer.status === 'active') {
+      const callAmount = state.hand.currentBet - (currentPlayer.currentBet || 0);
+      
+      availableActions = ['fold'];
+      
+      if (callAmount === 0) {
+        availableActions.push('check');
+        availableActions.push('raise');
+      } else {
+        availableActions.push('call');
+        availableActions.push('raise');
+      }
+      
+      if (currentPlayer.chips > 0) {
+        availableActions.push('all_in');
+      }
+    }
+  }
+
+  res.json({
+    ...state,
+    availableActions
+  });
+});
+
+// Join table
 router.post('/tables/:tableId/join', requireAuth, (req, res) => {
   const { tableId } = req.params;
-  const { buyinAmount } = req.body;
+  const { buyin } = req.body;
   const agent = req.agent;
 
-  const table = db.prepare('SELECT * FROM poker_tables WHERE id = ?').get(tableId) as any;
+  const table = pokerEngine.getTable(tableId);
   if (!table) {
     res.status(404).json({ error: 'table_not_found', message: 'Table not found' });
     return;
   }
 
   // Validate buyin
-  if (!buyinAmount || buyinAmount < table.min_buyin || buyinAmount > table.max_buyin) {
+  if (!buyin || buyin < table.config.minBuyin || buyin > table.config.maxBuyin) {
     res.status(400).json({ 
       error: 'invalid_buyin', 
-      message: `Buyin must be between ${table.min_buyin} and ${table.max_buyin}` 
+      message: `Buyin must be between ${table.config.minBuyin} and ${table.config.maxBuyin}` 
     });
     return;
   }
 
   // Check balance
-  const balanceField = table.currency === 'SOL' ? 'balance_sol' : 'balance_usdc';
-  if (agent[balanceField] < buyinAmount) {
-    res.status(400).json({ error: 'insufficient_balance', message: 'Insufficient balance' });
+  const balanceField = table.config.currency === 'SOL' ? 'balance_sol' : 'balance_usdc';
+  if (agent[balanceField] < buyin) {
+    res.status(400).json({ error: 'insufficient_balance', message: 'Insufficient wallet balance' });
     return;
-  }
-
-  // Check if already seated
-  const existing = db.prepare('SELECT * FROM poker_players WHERE table_id = ? AND agent_id = ?').get(tableId, agent.id);
-  if (existing) {
-    res.status(400).json({ error: 'already_seated', message: 'Already at this table' });
-    return;
-  }
-
-  // Check table capacity
-  const playerCount = db.prepare('SELECT COUNT(*) as count FROM poker_players WHERE table_id = ?').get(tableId) as any;
-  if (playerCount.count >= table.max_players) {
-    res.status(400).json({ error: 'table_full', message: 'Table is full' });
-    return;
-  }
-
-  // Find available seat
-  const takenSeats = db.prepare('SELECT seat FROM poker_players WHERE table_id = ?').all(tableId) as any[];
-  const takenSeatNumbers = takenSeats.map(s => s.seat);
-  let seat = 0;
-  while (takenSeatNumbers.includes(seat) && seat < table.max_players) {
-    seat++;
   }
 
   // Deduct from wallet
-  db.prepare(`UPDATE agents SET ${balanceField} = ${balanceField} - ? WHERE id = ?`).run(buyinAmount, agent.id);
+  db.prepare(`UPDATE agents SET ${balanceField} = ${balanceField} - ? WHERE id = ?`).run(buyin, agent.id);
 
-  // Add to table
-  db.prepare(`
-    INSERT INTO poker_players (table_id, agent_id, seat, chips)
-    VALUES (?, ?, ?, ?)
-  `).run(tableId, agent.id, seat, buyinAmount);
+  // Seat player
+  const username = agent.display_name || `${agent.wallet_address.slice(0, 4)}...${agent.wallet_address.slice(-4)}`;
+  const result = pokerEngine.seatPlayer(tableId, agent.id, username, buyin);
+
+  if (!result.success) {
+    // Refund if failed
+    db.prepare(`UPDATE agents SET ${balanceField} = ${balanceField} + ? WHERE id = ?`).run(buyin, agent.id);
+    res.status(400).json({ error: result.error });
+    return;
+  }
 
   // Log transaction
-  const newBalance = agent[balanceField] - buyinAmount;
+  const updated = db.prepare('SELECT * FROM agents WHERE id = ?').get(agent.id) as any;
   db.prepare(`
-    INSERT INTO transactions (agent_id, type, currency, amount, balance_after, created_at)
-    VALUES (?, 'buyin', ?, ?, ?, unixepoch())
-  `).run(agent.id, table.currency, buyinAmount, newBalance);
+    INSERT INTO transactions (agent_id, type, currency, amount, balance_after, reference, created_at)
+    VALUES (?, 'buyin', ?, ?, ?, ?, unixepoch())
+  `).run(agent.id, table.config.currency, buyin, updated[balanceField], tableId);
 
   res.json({
     success: true,
-    seat,
-    chips: buyinAmount
+    seat: result.seat,
+    chips: buyin
   });
 });
 
-// Leave table (cash out)
+// Leave table
 router.post('/tables/:tableId/leave', requireAuth, (req, res) => {
   const { tableId } = req.params;
   const agent = req.agent;
 
-  const player = db.prepare('SELECT * FROM poker_players WHERE table_id = ? AND agent_id = ?').get(tableId, agent.id) as any;
-  if (!player) {
-    res.status(400).json({ error: 'not_at_table', message: 'Not at this table' });
+  const table = pokerEngine.getTable(tableId);
+  if (!table) {
+    res.status(404).json({ error: 'table_not_found', message: 'Table not found' });
     return;
   }
 
-  const table = db.prepare('SELECT * FROM poker_tables WHERE id = ?').get(tableId) as any;
+  const result = pokerEngine.removePlayer(tableId, agent.id);
 
-  // Remove from table
-  db.prepare('DELETE FROM poker_players WHERE table_id = ? AND agent_id = ?').run(tableId, agent.id);
+  if (!result.success) {
+    res.status(400).json({ error: result.error, message: result.error });
+    return;
+  }
 
-  // Credit remaining chips
-  if (player.chips > 0) {
-    const balanceField = table.currency === 'SOL' ? 'balance_sol' : 'balance_usdc';
-    db.prepare(`UPDATE agents SET ${balanceField} = ${balanceField} + ? WHERE id = ?`).run(player.chips, agent.id);
+  // Return chips to wallet
+  if (result.remainingChips && result.remainingChips > 0) {
+    const balanceField = table.config.currency === 'SOL' ? 'balance_sol' : 'balance_usdc';
+    db.prepare(`UPDATE agents SET ${balanceField} = ${balanceField} + ? WHERE id = ?`).run(result.remainingChips, agent.id);
 
-    // Log transaction
     const updated = db.prepare('SELECT * FROM agents WHERE id = ?').get(agent.id) as any;
     db.prepare(`
-      INSERT INTO transactions (agent_id, type, currency, amount, balance_after, created_at)
-      VALUES (?, 'cashout', ?, ?, ?, unixepoch())
-    `).run(agent.id, table.currency, player.chips, updated[balanceField]);
+      INSERT INTO transactions (agent_id, type, currency, amount, balance_after, reference, created_at)
+      VALUES (?, 'cashout', ?, ?, ?, ?, unixepoch())
+    `).run(agent.id, table.config.currency, result.remainingChips, updated[balanceField], tableId);
   }
 
-  res.json({ success: true, remainingChips: player.chips });
-});
-
-// Start a hand
-router.post('/tables/:tableId/start', requireAuth, (req, res) => {
-  const { tableId } = req.params;
-  
-  // Get all players at table
-  const players = db.prepare(`
-    SELECT pp.*, a.display_name, a.wallet_address
-    FROM poker_players pp
-    JOIN agents a ON pp.agent_id = a.id
-    WHERE pp.table_id = ?
-  `).all(tableId) as any[];
-
-  if (players.length < 2) {
-    res.status(400).json({ error: 'not_enough_players', message: 'Need at least 2 players' });
-    return;
-  }
-
-  const table = db.prepare('SELECT * FROM poker_tables WHERE id = ?').get(tableId) as any;
-
-  // Create new hand
-  const handId = crypto.randomUUID();
-  const deck = createDeck();
-
-  // Deal hole cards
-  const playerCards = new Map();
-  for (const player of players) {
-    playerCards.set(player.agent_id, [deck.pop(), deck.pop()]);
-  }
-
-  // Post blinds
-  const smallBlindPlayer = players[0];
-  const bigBlindPlayer = players[1];
-
-  // Update player chips for blinds
-  db.prepare('UPDATE poker_players SET chips = chips - ?, current_bet = ? WHERE agent_id = ?')
-    .run(table.small_blind, table.small_blind, smallBlindPlayer.agent_id);
-  db.prepare('UPDATE poker_players SET chips = chips - ?, current_bet = ? WHERE agent_id = ?')
-    .run(table.big_blind, table.big_blind, bigBlindPlayer.agent_id);
-
-  // Create game state
-  const gameState = {
-    handId,
-    tableId,
-    phase: 'preflop',
-    players: players.map(p => ({
-      agentId: p.agent_id,
-      username: p.display_name || `${p.wallet_address.slice(0, 4)}...${p.wallet_address.slice(-4)}`,
-      seat: p.seat,
-      chips: p.agent_id === smallBlindPlayer.agent_id ? p.chips - table.small_blind : 
-              p.agent_id === bigBlindPlayer.agent_id ? p.chips - table.big_blind : p.chips,
-      holeCards: playerCards.get(p.agent_id),
-      status: 'active',
-      currentBet: p.agent_id === smallBlindPlayer.agent_id ? table.small_blind :
-                  p.agent_id === bigBlindPlayer.agent_id ? table.big_blind : 0
-    })),
-    communityCards: [],
-    pots: [{ amount: table.small_blind + table.big_blind, eligiblePlayers: players.map(p => p.agent_id) }],
-    currentPlayerIndex: 2 % players.length,
-    dealerIndex: 0,
-    smallBlind: table.small_blind,
-    bigBlind: table.big_blind,
-    currentBet: table.big_blind,
-    minRaise: table.big_blind,
-    deck
-  };
-
-  games.set(handId, gameState);
-
-  // Save to DB
-  db.prepare(`
-    INSERT INTO poker_hands (id, table_id, started_at)
-    VALUES (?, ?, unixepoch())
-  `).run(handId, tableId);
-
-  res.json({
-    success: true,
-    handId,
-    state: {
-      ...gameState,
-      deck: undefined // Don't send deck to client
-    }
-  });
+  res.json({ success: true, returnedChips: result.remainingChips });
 });
 
 // Perform action
-router.post('/hands/:handId/action', requireAuth, (req, res) => {
-  const { handId } = req.params;
+router.post('/tables/:tableId/action', requireAuth, (req, res) => {
+  const { tableId } = req.params;
   const { action, amount } = req.body;
   const agent = req.agent;
 
-  const game = games.get(handId);
-  if (!game) {
+  const result = pokerEngine.performAction(tableId, agent.id, action, amount);
+
+  if (!result.success) {
+    res.status(400).json({ 
+      error: result.error || 'invalid_action', 
+      message: (result as any).message || 'Invalid action' 
+    });
+    return;
+  }
+
+  // If hand completed, save to DB
+  if (result.result) {
+    const handResult = result.result;
+    const table = pokerEngine.getTable(tableId);
+    
+    if (table) {
+      // Save hand to DB
+      db.prepare(`
+        INSERT INTO poker_hands (id, table_id, pot, rake, community_cards, winner_ids, hand_data, started_at, finished_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+      `).run(
+        handResult.handId,
+        tableId,
+        handResult.totalPot,
+        handResult.rake,
+        JSON.stringify(handResult.communityCards),
+        JSON.stringify(handResult.winners.map(w => w.agentId)),
+        JSON.stringify(handResult),
+        Math.floor(Date.now() / 1000) - 60 // Approximate start time
+      );
+
+      // Log rake
+      if (handResult.rake > 0) {
+        db.prepare(`
+          INSERT INTO rake_log (game_type, game_id, amount, currency, pot_size, created_at)
+          VALUES ('poker', ?, ?, ?, ?, unixepoch())
+        `).run(handResult.handId, handResult.rake, table.config.currency, handResult.totalPot);
+      }
+
+      // Update player stats
+      for (const winner of handResult.winners) {
+        db.prepare(`
+          UPDATE agents SET games_played = games_played + 1, total_profit = total_profit + ? WHERE id = ?
+        `).run(winner.amount, winner.agentId);
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    handState: result.handState,
+    result: result.result
+  });
+});
+
+// Get hand history
+router.get('/hands/:handId', requireAuth, (req, res) => {
+  const { handId } = req.params;
+
+  // Get from DB
+  const hand = db.prepare('SELECT * FROM poker_hands WHERE id = ?').get(handId) as any;
+  
+  if (!hand) {
     res.status(404).json({ error: 'hand_not_found', message: 'Hand not found' });
     return;
   }
 
-  const player = game.players.find((p: any) => p.agentId === agent.id);
-  if (!player) {
-    res.status(400).json({ error: 'not_in_hand', message: 'Not in this hand' });
-    return;
-  }
-
-  // Validate action
-  if (!['fold', 'check', 'call', 'raise', 'all_in'].includes(action)) {
-    res.status(400).json({ error: 'invalid_action', message: 'Invalid action' });
-    return;
-  }
-
-  // Process action
-  switch (action) {
-    case 'fold':
-      player.status = 'folded';
-      break;
-    case 'check':
-      // Only if no bet to call
-      if (game.currentBet > player.currentBet) {
-        res.status(400).json({ error: 'cannot_check', message: 'Cannot check, there is a bet to call' });
-        return;
-      }
-      break;
-    case 'call':
-      const callAmount = game.currentBet - player.currentBet;
-      if (player.chips < callAmount) {
-        res.status(400).json({ error: 'insufficient_chips', message: 'Not enough chips to call' });
-        return;
-      }
-      player.chips -= callAmount;
-      player.currentBet += callAmount;
-      break;
-    case 'raise':
-      if (!amount || amount <= game.currentBet) {
-        res.status(400).json({ error: 'invalid_raise', message: 'Raise amount must be greater than current bet' });
-        return;
-      }
-      const raiseAmount = amount - player.currentBet;
-      if (player.chips < raiseAmount) {
-        res.status(400).json({ error: 'insufficient_chips', message: 'Not enough chips to raise' });
-        return;
-      }
-      player.chips -= raiseAmount;
-      player.currentBet = amount;
-      game.currentBet = amount;
-      game.minRaise = amount - game.currentBet + amount;
-      break;
-    case 'all_in':
-      player.currentBet += player.chips;
-      if (player.currentBet > game.currentBet) {
-        game.currentBet = player.currentBet;
-      }
-      player.chips = 0;
-      player.status = 'all_in';
-      break;
-  }
-
-  // Move to next player
-  game.currentPlayerIndex = (game.currentPlayerIndex + 1) % game.players.length;
-
-  // Update pot
-  const totalBets = game.players.reduce((sum: number, p: any) => sum + p.currentBet, 0);
-  game.pots[0].amount = totalBets;
-
   res.json({
-    success: true,
-    state: {
-      ...game,
-      deck: undefined
-    }
+    id: hand.id,
+    tableId: hand.table_id,
+    pot: hand.pot,
+    rake: hand.rake,
+    communityCards: JSON.parse(hand.community_cards || '[]'),
+    winners: JSON.parse(hand.winner_ids || '[]'),
+    handData: JSON.parse(hand.hand_data || '{}'),
+    startedAt: hand.started_at,
+    finishedAt: hand.finished_at
   });
 });
-
-// Calculate rake helper
-function calculateRake(potSize: number, blindLevel: string, numPlayers: number): number {
-  const config = RAKE_CONFIG.caps[blindLevel];
-  if (!config) return Math.min(potSize * 0.05, 3); // Default cap
-  
-  const cap = config[Math.min(numPlayers, 6)];
-  return Math.min(potSize * RAKE_CONFIG.percentage, cap);
-}
 
 export default router;
