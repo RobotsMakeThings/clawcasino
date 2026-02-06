@@ -5,23 +5,6 @@ import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 
-import { initDatabase, initDefaultTables } from './db';
-import { errorHandler } from './middleware/auth';
-import { runBackgroundJobs } from './cron';
-
-// Routes
-import authRoutes from './routes/auth';
-import agentsRoutes from './routes/agents';
-import walletRoutes from './routes/wallet';
-import pokerRoutes from './routes/poker';
-import coinflipRoutes from './routes/coinflip';
-import rpsRoutes from './routes/rps';
-import adminRoutes from './routes/admin';
-import feedRoutes from './routes/feed';
-import leaderboardRoutes from './routes/leaderboard';
-import statsRoutes from './routes/stats';
-import agentStatsRoutes from './routes/agent';
-
 dotenv.config();
 
 const app = express();
@@ -30,28 +13,15 @@ const wss = new WebSocketServer({ server });
 
 // Middleware
 app.use(helmet());
-app.use(cors());
+app.use(cors({ origin: process.env.CORS_ORIGINS || '*' }));
 app.use(express.json());
-
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/agent', agentsRoutes);
-app.use('/api/wallet', walletRoutes);
-app.use('/api/poker', pokerRoutes);
-app.use('/api/coinflip', coinflipRoutes);
-app.use('/api/rps', rpsRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/feed', feedRoutes);
-app.use('/api/leaderboard', leaderboardRoutes);
-app.use('/api/stats', statsRoutes);
-app.use('/api/agent/:id', agentStatsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    timestamp: Date.now(),
-    version: '1.0.0'
+  res.json({
+    status: 'ok',
+    version: '1.0.0',
+    games: ['poker', 'coinflip', 'rps']
   });
 });
 
@@ -76,18 +46,13 @@ wss.on('connection', (ws) => {
 });
 
 // Error handler
-app.use(errorHandler);
-
-// Initialize
-initDatabase();
-initDefaultTables();
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('Error:', err);
+  res.status(500).json({ error: 'internal_error', message: 'An internal error occurred' });
+});
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`🦀 Clawsino API running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
 });
-
-// Run background jobs every 10 seconds
-setInterval(runBackgroundJobs, 10000);
-console.log('⏰ Background jobs scheduled (every 10s)');
