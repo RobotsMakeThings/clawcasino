@@ -1,11 +1,11 @@
 [build]
-builder = "NIXPACKS"
+builder = "nixpacks"
 
-[deploy]
-startCommand = "cd apps/api && npm install && npx tsx src/index.ts"
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
+[phases.build]
+cmds = ["cd apps/api && npm install"]
 
-[deploy.healthcheck]
-path = "/api/health"
-timeout = 30
+[phases.setup]
+nixPkgs = ["nodePackages.npm", "nodejs_20"]
+
+[start]
+cmd = "cd apps/api && ./start.sh"
