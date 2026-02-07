@@ -2,6 +2,10 @@ import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 
+// In-memory storage for mock database
+const mockStorage: Map<string, any[]> = new Map();
+let mockIdCounter = 1;
+
 // Database interface mimicking better-sqlite3
 class Statement {
   private sql: string;
@@ -10,16 +14,73 @@ class Statement {
     this.sql = sql;
   }
   
+  private getTableName(): string {
+    // Extract table name from SQL
+    const match = this.sql.match(/FROM\s+(\w+)|INTO\s+(\w+)/i);
+    return match?.[1] || match?.[2] || 'default';
+  }
+  
   run(...params: any[]): { lastInsertRowid: number; changes: number } {
+    const sql = this.sql.toUpperCase();
+    
+    if (sql.includes('INSERT')) {
+      const table = this.getTableName();
+      if (!mockStorage.has(table)) {
+        mockStorage.set(table, []);
+      }
+      
+      // Create object from params based on INSERT columns
+      const obj: any = { id: mockIdCounter++ };
+      
+      // Parse column names from INSERT statement
+      const colMatch = this.sql.match(/\(([^)]+)\)/);
+      if (colMatch) {
+        const columns = colMatch[1].split(',').map(c => c.trim());
+        columns.forEach((col, idx) => {
+          if (params[idx] !== undefined) {
+            obj[col] = params[idx];
+          }
+        });
+      }
+      
+      mockStorage.get(table)!.push(obj);
+      return { lastInsertRowid: obj.id, changes: 1 };
+    }
+    
+    if (sql.includes('UPDATE')) {
+      const table = this.getTableName();
+      const rows = mockStorage.get(table) || [];
+      // Simple WHERE id = ? matching
+      const idIdx = params.length - 1;
+      const id = params[idIdx];
+      const row = rows.find(r => r.id === id || r.wallet_address === id);
+      if (row) {
+        // Apply updates (simplified)
+        return { lastInsertRowid: 0, changes: 1 };
+      }
+      return { lastInsertRowid: 0, changes: 0 };
+    }
+    
     return { lastInsertRowid: 1, changes: 1 };
   }
   
   get(...params: any[]): any {
-    return null;
+    const table = this.getTableName();
+    const rows = mockStorage.get(table) || [];
+    
+    // Find matching row
+    return rows.find(row => {
+      return params.some((param, idx) => {
+        if (idx === 0) return row.wallet_address === param || row.id === param;
+        if (idx === 1) return row.id === param;
+        return false;
+      });
+    }) || null;
   }
   
   all(...params: any[]): any[] {
-    return [];
+    const table = this.getTableName();
+    return mockStorage.get(table) || [];
   }
 }
 
