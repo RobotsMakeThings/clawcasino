@@ -1,107 +1,65 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { db } from '../db';
+import { getDatabase } from '../db';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'clawcasino-jwt-secret-change-me';
+export interface Agent {
+  id: string;
+  wallet_address: string;
+  display_name: string;
+  balance_sol: number;
+  balance_usdc: number;
+  games_played: number;
+  total_profit: number;
+  created_at?: number;
+}
 
-// Extend Express Request
+export interface AuthRequest extends Request {
+  agent?: Agent;
+}
+
 declare global {
   namespace Express {
     interface Request {
-      agent?: any;
+      agent?: Agent;
     }
   }
 }
 
-// Auth middleware - verify JWT
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'unauthorized', message: 'Authorization required' });
-    return;
+    return res.status(401).json({ error: 'Unauthorized - Bearer token required' });
   }
-
+  
   const token = authHeader.slice(7);
-
+  
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const payload = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret') as {
+      agentId: string;
+      wallet: string;
+    };
     
-    // Get agent from DB
-    const agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(decoded.agentId);
+    const db = getDatabase();
+    const agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(payload.agentId);
     
     if (!agent) {
-      res.status(401).json({ error: 'unauthorized', message: 'Agent not found' });
-      return;
+      return res.status(401).json({ error: 'Unauthorized - Agent not found' });
     }
-
-    // Update last active
-    db.prepare('UPDATE agents SET last_active_at = unixepoch() WHERE id = ?').run(decoded.agentId);
-
+    
     req.agent = agent;
     next();
-  } catch (error) {
-    res.status(401).json({ error: 'unauthorized', message: 'Invalid or expired token' });
+  } catch (err) {
+    return res.status(401).json({ error: 'Unauthorized - Invalid token' });
   }
 }
 
-// Admin auth middleware
-const ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'clawcasino-admin-key-change-me';
-
-export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  const authHeader = req.headers.authorization;
+export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const apiKey = req.headers['x-admin-key'] || req.query.adminKey;
   
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'unauthorized', message: 'Admin authorization required' });
-    return;
+  if (!apiKey || apiKey !== process.env.ADMIN_API_KEY) {
+    return res.status(403).json({ error: 'Forbidden - Admin access required' });
   }
-
-  const token = authHeader.slice(7);
   
-  if (token !== ADMIN_API_KEY) {
-    res.status(401).json({ error: 'unauthorized', message: 'Invalid admin key' });
-    return;
-  }
-
   next();
-}
-
-// Rate limiting middleware
-const requestCounts = new Map<string, { count: number; resetAt: number }>();
-
-export function rateLimit(req: Request, res: Response, next: NextFunction): void {
-  // Get identifier (agent ID if authenticated, otherwise IP)
-  const identifier = req.agent?.id || req.ip || 'unknown';
-  const now = Date.now();
-  const windowMs = 60 * 1000; // 1 minute
-  const maxRequests = 100;
-
-  const record = requestCounts.get(identifier);
-  
-  if (!record || now > record.resetAt) {
-    // New window
-    requestCounts.set(identifier, { count: 1, resetAt: now + windowMs });
-    next();
-    return;
-  }
-
-  if (record.count >= maxRequests) {
-    res.status(429).json({ 
-      error: 'rate_limited', 
-      message: 'Too many requests. Please slow down.' 
-    });
-    return;
-  }
-
-  record.count++;
-  next();
-}
-
-// Error handler middleware
-export function errorHandler(err: Error, req: Request, res: Response, next: NextFunction): void {
-  console.error('Error:', err);
-  res.status(500).json({ 
-    error: 'internal_error', 
-    message: 'An internal error occurred' 
-  });
 }

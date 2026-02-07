@@ -1,73 +1,64 @@
 import { Router } from 'express';
-import { PublicKey } from '@solana/web3.js';
-import nacl from 'tweetnacl';
-import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import { db } from '../db';
+import jwt from 'jsonwebtoken';
+import bs58 from 'bs58';
+import nacl from 'tweetnacl';
+import { getDatabase } from '../db';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'clawcasino-jwt-secret-change-me';
 
-// Generate nonce
+// GET /api/auth/nonce - Generate authentication nonce
 router.get('/nonce', (req, res) => {
-  const nonce = uuidv4();
+  const nonce = `Clawsino auth: ${uuidv4()}`;
   res.json({ nonce });
 });
 
-// Verify signature and authenticate
+// POST /api/auth/verify - Verify signature and issue JWT
 router.post('/verify', (req, res) => {
   const { publicKey, signature, nonce } = req.body;
-
+  
   if (!publicKey || !signature || !nonce) {
-    res.status(400).json({ 
-      error: 'missing_fields', 
-      message: 'publicKey, signature, and nonce are required' 
-    });
-    return;
+    return res.status(400).json({ error: 'Missing required fields: publicKey, signature, nonce' });
   }
-
+  
   try {
-    // Validate public key format
-    let pubkey: PublicKey;
-    try {
-      pubkey = new PublicKey(publicKey);
-    } catch {
-      res.status(400).json({ error: 'invalid_key', message: 'Invalid Solana public key' });
-      return;
-    }
-
+    // Decode base58 public key and signature
+    const pubKeyBytes = bs58.decode(publicKey);
+    const sigBytes = bs58.decode(signature);
+    const nonceBytes = new TextEncoder().encode(nonce);
+    
     // Verify signature
-    const message = new TextEncoder().encode(nonce);
-    const signatureBytes = Buffer.from(signature, 'base64');
-    const publicKeyBytes = pubkey.toBytes();
-
-    const isValid = nacl.sign.detached.verify(message, signatureBytes, publicKeyBytes);
-
+    const isValid = nacl.sign.detached.verify(nonceBytes, sigBytes, pubKeyBytes);
+    
     if (!isValid) {
-      res.status(401).json({ error: 'invalid_signature', message: 'Signature verification failed' });
-      return;
+      return res.status(401).json({ error: 'Invalid signature' });
     }
-
+    
+    const db = getDatabase();
+    
     // Find or create agent
-    let agent = db.prepare('SELECT * FROM agents WHERE wallet_address = ?').get(publicKey) as any;
-
+    let agent = db.prepare('SELECT * FROM agents WHERE wallet_address = ?').get(publicKey);
+    
     if (!agent) {
       // Create new agent
-      const result = db.prepare(`
-        INSERT INTO agents (wallet_address, created_at)
-        VALUES (?, unixepoch())
-      `).run(publicKey);
-
-      agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(result.lastInsertRowid);
+      const id = uuidv4();
+      const displayName = `Agent_${publicKey.slice(0, 8)}`;
+      
+      db.prepare(`
+        INSERT INTO agents (id, wallet_address, display_name, balance_sol, balance_usdc, games_played, total_profit, created_at)
+        VALUES (?, ?, ?, 0, 0, 0, 0, datetime('now'))
+      `).run(id, publicKey, displayName);
+      
+      agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(id);
     }
-
-    // Generate JWT (24 hour expiry)
+    
+    // Generate JWT
     const token = jwt.sign(
-      { agentId: agent.id, walletAddress: publicKey },
-      JWT_SECRET,
+      { agentId: agent.id, wallet: agent.wallet_address },
+      process.env.JWT_SECRET || 'fallback-secret',
       { expiresIn: '24h' }
     );
-
+    
     res.json({
       token,
       agent: {
@@ -75,12 +66,14 @@ router.post('/verify', (req, res) => {
         wallet_address: agent.wallet_address,
         display_name: agent.display_name,
         balance_sol: agent.balance_sol,
-        balance_usdc: agent.balance_usdc
+        balance_usdc: agent.balance_usdc,
+        games_played: agent.games_played,
+        total_profit: agent.total_profit
       }
     });
-  } catch (error) {
-    console.error('Auth verify error:', error);
-    res.status(500).json({ error: 'verification_failed', message: 'Authentication failed' });
+  } catch (err) {
+    console.error('Auth verification error:', err);
+    return res.status(500).json({ error: 'Verification failed' });
   }
 });
 

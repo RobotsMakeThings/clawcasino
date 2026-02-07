@@ -59,6 +59,36 @@ try {
 
 export const db = dbInstance;
 
+// Helper function to get database instance
+export function getDatabase() {
+  return db;
+}
+
+// Helper function to adjust agent balance
+export function adjustBalance(
+  agentId: string,
+  amount: number,
+  currency: 'SOL' | 'USDC',
+  type: string,
+  gameType?: string,
+  gameId?: string,
+  description?: string
+): void {
+  const column = currency === 'SOL' ? 'balance_sol' : 'balance_usdc';
+  
+  // Update balance
+  db.prepare(`UPDATE agents SET ${column} = ${column} + ? WHERE id = ?`).run(amount, agentId);
+  
+  // Get new balance
+  const agent = db.prepare(`SELECT ${column} as balance FROM agents WHERE id = ?`).get(agentId);
+  
+  // Log transaction
+  db.prepare(`
+    INSERT INTO transactions (agent_id, type, currency, amount, balance_after, game_type, game_id, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(agentId, type, currency, amount, agent.balance, gameType || null, gameId || null, description || null);
+}
+
 export function initDatabase(): void {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');

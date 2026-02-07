@@ -1,200 +1,132 @@
 import { Router } from 'express';
-import { PublicKey } from '@solana/web3.js';
-import { requireAuth } from '../middleware/auth';
-import { db } from '../db';
-import crypto from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
+import { requireAuth, AuthRequest } from '../middleware/auth';
+import { getDatabase, adjustBalance } from '../db';
 
 const router = Router();
 
-// Rate limiting for withdrawals
-const withdrawalLimits = new Map<string, { count: number; resetAt: number }>();
+// All routes require authentication
+router.use(requireAuth);
 
-// Get wallet info
-router.get('/', requireAuth, (req, res) => {
-  const agent = req.agent;
-  
-  // Get recent transactions
-  const transactions = db.prepare(`
-    SELECT id, type, currency, amount, balance_after, reference, created_at
-    FROM transactions
-    WHERE agent_id = ?
-    ORDER BY created_at DESC
-    LIMIT 20
-  `).all(agent.id);
-
+// GET /api/wallet - Get wallet balances
+router.get('/', (req: AuthRequest, res) => {
   res.json({
-    balances: {
-      sol: agent.balance_sol,
-      usdc: agent.balance_usdc
-    },
-    transactions: transactions.map((t: any) => ({
-      id: t.id,
-      type: t.type,
-      currency: t.currency,
-      amount: t.amount,
-      balance_after: t.balance_after,
-      reference: t.reference,
-      created_at: t.created_at
-    }))
+    balance_sol: req.agent!.balance_sol,
+    balance_usdc: req.agent!.balance_usdc
   });
 });
 
-// Deposit (MVP - direct credit)
-router.post('/deposit', requireAuth, (req, res) => {
-  const agent = req.agent;
+// POST /api/wallet/deposit - Deposit funds (MVP: credit directly)
+router.post('/deposit', (req: AuthRequest, res) => {
   const { amount, currency } = req.body;
-
-  if (!amount || amount <= 0) {
-    res.status(400).json({ error: 'invalid_amount', message: 'Amount must be positive' });
-    return;
-  }
-
-  if (!currency || !['SOL', 'USDC'].includes(currency)) {
-    res.status(400).json({ error: 'invalid_currency', message: 'Currency must be SOL or USDC' });
-    return;
-  }
-
-  // Min deposit: 0.01 SOL or 1 USDC
-  const minAmount = currency === 'SOL' ? 0.01 : 1;
-  if (amount < minAmount) {
-    res.status(400).json({ error: 'below_minimum', message: `Minimum deposit is ${minAmount} ${currency}` });
-    return;
-  }
-
-  // Credit balance
-  const balanceField = currency === 'SOL' ? 'balance_sol' : 'balance_usdc';
-  db.prepare(`UPDATE agents SET ${balanceField} = ${balanceField} + ? WHERE id = ?`).run(amount, agent.id);
-
-  // Log transaction
-  const newBalance = agent[balanceField] + amount;
-  const txId = crypto.randomUUID();
-  db.prepare(`
-    INSERT INTO transactions (agent_id, type, currency, amount, balance_after, created_at)
-    VALUES (?, 'deposit', ?, ?, ?, unixepoch())
-  `).run(agent.id, currency, amount, newBalance);
-
-  const updated = db.prepare('SELECT * FROM agents WHERE id = ?').get(agent.id);
-
-  res.json({
-    success: true,
-    balances: {
-      sol: updated.balance_sol,
-      usdc: updated.balance_usdc
-    }
-  });
-});
-
-// Withdraw
-router.post('/withdraw', requireAuth, (req, res) => {
-  const agent = req.agent;
-  const { amount, currency, destination_address } = req.body;
-
-  if (!amount || amount <= 0) {
-    res.status(400).json({ error: 'invalid_amount', message: 'Amount must be positive' });
-    return;
-  }
-
-  if (!currency || !['SOL', 'USDC'].includes(currency)) {
-    res.status(400).json({ error: 'invalid_currency', message: 'Currency must be SOL or USDC' });
-    return;
-  }
-
-  if (!destination_address) {
-    res.status(400).json({ error: 'missing_address', message: 'Destination address is required' });
-    return;
-  }
-
-  // Validate Solana address
-  try {
-    new PublicKey(destination_address);
-  } catch {
-    res.status(400).json({ error: 'invalid_address', message: 'Invalid Solana address' });
-    return;
-  }
-
-  // Check balance
-  const balanceField = currency === 'SOL' ? 'balance_sol' : 'balance_usdc';
-  if (agent[balanceField] < amount) {
-    res.status(400).json({ error: 'insufficient_balance', message: 'Insufficient balance' });
-    return;
-  }
-
-  // Rate limit: 3 per hour
-  const now = Date.now();
-  const hourAgo = now - 60 * 60 * 1000;
   
-  let limit = withdrawalLimits.get(agent.id);
-  if (!limit || now > limit.resetAt) {
-    limit = { count: 0, resetAt: now + 60 * 60 * 1000 };
-    withdrawalLimits.set(agent.id, limit);
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Invalid amount' });
   }
-
-  if (limit.count >= 3) {
-    res.status(429).json({ error: 'rate_limited', message: 'Max 3 withdrawals per hour' });
-    return;
+  
+  if (!currency || !['SOL', 'USDC'].includes(currency)) {
+    return res.status(400).json({ error: 'Invalid currency. Use SOL or USDC' });
   }
-
-  // Deduct balance
-  db.prepare(`UPDATE agents SET ${balanceField} = ${balanceField} - ? WHERE id = ?`).run(amount, agent.id);
-
-  // Log transaction
-  const newBalance = agent[balanceField] - amount;
-  const txId = crypto.randomUUID();
-  db.prepare(`
-    INSERT INTO transactions (agent_id, type, currency, amount, balance_after, reference, created_at)
-    VALUES (?, 'withdrawal', ?, ?, ?, ?, unixepoch())
-  `).run(agent.id, currency, amount, newBalance, destination_address);
-
-  limit.count++;
-
-  const updated = db.prepare('SELECT * FROM agents WHERE id = ?').get(agent.id);
-
-  res.json({
-    success: true,
-    amount,
-    currency,
-    destination: destination_address,
-    tx_id: 'pending',
-    balances: {
-      sol: updated.balance_sol,
-      usdc: updated.balance_usdc
-    }
-  });
+  
+  try {
+    const db = getDatabase();
+    
+    // Credit the balance
+    adjustBalance(req.agent!.id, amount, currency as 'SOL' | 'USDC', 'deposit');
+    
+    // Get updated balances
+    const agent = db.prepare(`SELECT balance_sol, balance_usdc FROM agents WHERE id = ?`).get(req.agent!.id);
+    
+    res.json({
+      balance_sol: agent.balance_sol,
+      balance_usdc: agent.balance_usdc,
+      transaction_id: uuidv4()
+    });
+  } catch (err) {
+    console.error('Deposit error:', err);
+    return res.status(500).json({ error: 'Deposit failed' });
+  }
 });
 
-// Get transaction history
-router.get('/transactions', requireAuth, (req, res) => {
-  const agent = req.agent;
-  const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+// POST /api/wallet/withdraw - Withdraw funds
+router.post('/withdraw', (req: AuthRequest, res) => {
+  const { amount, currency } = req.body;
+  
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Invalid amount' });
+  }
+  
+  if (!currency || !['SOL', 'USDC'].includes(currency)) {
+    return res.status(400).json({ error: 'Invalid currency. Use SOL or USDC' });
+  }
+  
+  const isSol = currency === 'SOL';
+  const currentBalance = isSol ? req.agent!.balance_sol : req.agent!.balance_usdc;
+  
+  if (amount > currentBalance) {
+    return res.status(400).json({ error: 'Insufficient balance' });
+  }
+  
+  try {
+    const db = getDatabase();
+    
+    // Debit the balance
+    adjustBalance(req.agent!.id, -amount, currency as 'SOL' | 'USDC', 'withdrawal');
+    
+    // Get updated balances
+    const agent = db.prepare(`SELECT balance_sol, balance_usdc FROM agents WHERE id = ?`).get(req.agent!.id);
+    
+    res.json({
+      balance_sol: agent.balance_sol,
+      balance_usdc: agent.balance_usdc,
+      transaction_id: uuidv4()
+    });
+  } catch (err) {
+    console.error('Withdrawal error:', err);
+    return res.status(500).json({ error: 'Withdrawal failed' });
+  }
+});
+
+// GET /api/wallet/transactions - Get transaction history
+router.get('/transactions', (req: AuthRequest, res) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
   const offset = parseInt(req.query.offset as string) || 0;
-
-  const transactions = db.prepare(`
-    SELECT id, type, currency, amount, balance_after, reference, created_at
-    FROM transactions
-    WHERE agent_id = ?
-    ORDER BY created_at DESC
-    LIMIT ? OFFSET ?
-  `).all(agent.id, limit, offset);
-
-  const total = db.prepare('SELECT COUNT(*) as count FROM transactions WHERE agent_id = ?').get(agent.id) as any;
-
-  res.json({
-    transactions: transactions.map((t: any) => ({
-      id: t.id,
-      type: t.type,
-      currency: t.currency,
-      amount: t.amount,
-      balance_after: t.balance_after,
-      reference: t.reference,
-      created_at: t.created_at
-    })),
-    pagination: {
-      total: total.count,
-      limit,
-      offset,
-      hasMore: offset + limit < total.count
-    }
-  });
+  
+  try {
+    const db = getDatabase();
+    
+    const transactions = db.prepare(`
+      SELECT id, type, amount, currency, description, created_at
+      FROM transactions
+      WHERE agent_id = ?
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(req.agent!.id, limit, offset);
+    
+    const countRow = db.prepare(`
+      SELECT COUNT(*) as total FROM transactions WHERE agent_id = ?
+    `).get(req.agent!.id);
+    
+    res.json({
+      transactions: transactions.map((t: any) => ({
+        id: t.id,
+        type: t.type,
+        amount: t.amount,
+        currency: t.currency,
+        status: 'completed',
+        timestamp: Math.floor(new Date(t.created_at).getTime() / 1000)
+      })),
+      pagination: {
+        total: countRow.total,
+        limit,
+        offset,
+        hasMore: offset + limit < countRow.total
+      }
+    });
+  } catch (err) {
+    console.error('Transaction history error:', err);
+    return res.status(500).json({ error: 'Failed to fetch transactions' });
+  }
 });
 
 export default router;
