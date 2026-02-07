@@ -17,6 +17,9 @@ import coinflipRoutes from './routes/coinflip';
 import rpsRoutes from './routes/rps';
 import agentRoutes from './routes/agent';
 
+// Import WebSocket handler
+import { handleWebSocketConnection } from './ws';
+
 dotenv.config();
 
 // Initialize database (creates tables and seeds default data)
@@ -54,24 +57,7 @@ app.use('/api/rps', rpsRoutes);
 app.use('/api/agent', agentRoutes);
 
 // WebSocket
-wss.on('connection', (ws) => {
-  console.log('WebSocket connected');
-  
-  ws.on('message', (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      if (msg.type === 'subscribe' && msg.table_id) {
-        ws.send(JSON.stringify({ type: 'subscribed', table_id: msg.table_id }));
-      }
-    } catch {
-      // Invalid message
-    }
-  });
-  
-  ws.on('close', () => {
-    console.log('WebSocket disconnected');
-  });
-});
+wss.on('connection', handleWebSocketConnection);
 
 // Error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

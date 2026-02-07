@@ -14,6 +14,19 @@ import { calculateRake, RAKE_CAPS, distributePot } from './rake';
 import { getDatabase, adjustBalance } from '../../db';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
+import {
+  broadcastPlayerJoined,
+  broadcastPlayerLeft,
+  broadcastHandStarted,
+  broadcastAction,
+  broadcastFlop,
+  broadcastTurn,
+  broadcastRiver,
+  broadcastShowdown,
+  broadcastHandComplete,
+  maybeBroadcastTurnTimer,
+  sendHoleCards
+} from '../../ws';
 
 // Table configuration
 export interface TableConfig {
@@ -181,7 +194,10 @@ export function seatPlayer(
   };
   
   table.seats.set(seatNumber, player);
-  
+
+  // Broadcast player joined
+  broadcastPlayerJoined(tableId, agentId, displayName, seatNumber, buyin);
+
   // Auto-start hand if enough players and not in progress
   if (!table.handInProgress && table.seats.size >= 2) {
     setTimeout(() => startHand(tableId), 3000);
@@ -233,7 +249,13 @@ export function removePlayer(tableId: string, agentId: string): { success: boole
   }
   
   table.seats.delete(seatNumber);
-  
+
+  // Broadcast player left (with chips returned)
+  const chipsReturned = table.handInProgress && player.status !== 'folded' && player.status !== 'sitting_out'
+    ? player.chips
+    : player.chips + player.betThisRound;
+  broadcastPlayerLeft(tableId, agentId, seatNumber, chipsReturned);
+
   return { success: true };
 }
 
@@ -293,6 +315,8 @@ export function startHand(tableId: string): { success: boolean; error?: string }
   for (const player of table.seats.values()) {
     if (player.status === 'active') {
       player.holeCards = [table.deck[deckIndex++], table.deck[deckIndex++]];
+      // Send hole cards privately to this player
+      sendHoleCards(tableId, player.agentId, player.holeCards.map(cardToString));
     }
   }
   
@@ -341,9 +365,12 @@ export function startHand(tableId: string): { success: boolean; error?: string }
   
   // Start action timer
   startActionTimer(tableId);
-  
+
+  // Broadcast hand started
+  broadcastHandStarted(tableId, table.handId, table.dealerSeat, sbSeat, bbSeat);
+
   console.log(`🎴 Hand ${table.handId.slice(0, 8)} started at ${table.config.name}`);
-  
+
   return { success: true };
 }
 
@@ -456,16 +483,19 @@ export function handleAction(
     return { success: true, handComplete: true };
   }
   
+  // Broadcast the action
+  broadcastAction(tableId, agentId, player.displayName, seatNumber, action, amount || 0, table.pot, table.currentBet);
+
   // Move to next player
   advanceTurn(table);
-  
+
   // Check if betting round is complete
   if (isBettingRoundComplete(table)) {
     advancePhase(tableId);
   } else {
     startActionTimer(tableId);
   }
-  
+
   return { success: true };
 }
 
@@ -521,18 +551,21 @@ function advancePhase(tableId: string): void {
       table.phase = 'flop';
       // Deal flop
       table.communityCards = [table.deck[0], table.deck[1], table.deck[2]];
+      broadcastFlop(tableId, table.communityCards.map(cardToString));
       break;
-      
+
     case 'flop':
       table.phase = 'turn';
       table.communityCards.push(table.deck[3]);
+      broadcastTurn(tableId, cardToString(table.deck[3]));
       break;
-      
+
     case 'turn':
       table.phase = 'river';
       table.communityCards.push(table.deck[4]);
+      broadcastRiver(tableId, cardToString(table.deck[4]));
       break;
-      
+
     case 'river':
       table.phase = 'showdown';
       resolveHand(tableId);
@@ -642,13 +675,51 @@ function resolveHand(tableId: string): void {
     `).run(winAmount - bestHand.player.totalBetThisHand, bestHand.player.agentId);
   }
   
+  // Prepare showdown data
+  const winners = potWinners.map(pw => {
+    const winner = handEvaluations.find(h => h.player.agentId === pw.winnerId);
+    return {
+      agent_id: pw.winnerId,
+      display_name: winner?.player.displayName || '',
+      hand_name: winner?.eval.name || '',
+      cards: winner?.player.holeCards.map(cardToString) || [],
+      payout: table.sidePots.find(p => p.id === pw.potId)?.amount || 0
+    };
+  });
+
+  const losers = handEvaluations
+    .filter(h => !potWinners.some(pw => pw.winnerId === h.player.agentId))
+    .map(h => ({
+      agent_id: h.player.agentId,
+      display_name: h.player.displayName,
+      hand_name: h.eval.name,
+      cards: h.player.holeCards.map(cardToString)
+    }));
+
+  const totalRake = table.sidePots.reduce((sum, pot) => {
+    const sawFlop = table.communityCards.length >= 3;
+    const blindLevel = `${table.config.smallBlind}/${table.config.bigBlind}`;
+    const rakeResult = calculateRake(pot.amount, blindLevel, nonFoldedPlayers.length, sawFlop, table.handId, table.config.currency);
+    return sum + rakeResult.rake;
+  }, 0);
+
+  // Broadcast showdown
+  broadcastShowdown(
+    tableId,
+    winners,
+    losers,
+    table.communityCards.map(cardToString),
+    table.pot,
+    totalRake
+  );
+
   // Log hand
   const db = getDatabase();
   db.prepare(`
     INSERT INTO poker_hands (id, table_id, phase, community_cards, pot, rake, completed_at)
     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-  `).run(table.handId, table.id, table.phase, JSON.stringify(table.communityCards), table.pot, 0);
-  
+  `).run(table.handId, table.id, table.phase, JSON.stringify(table.communityCards), table.pot, totalRake);
+
   endHand(tableId);
 }
 
@@ -697,6 +768,9 @@ function endHand(tableId: string): void {
     player.lastAction = '';
   }
   
+  // Broadcast hand complete
+  broadcastHandComplete(tableId, table.handId, 3);
+
   // Auto-start next hand after 3 seconds if enough players
   setTimeout(() => {
     const activePlayers = Array.from(table!.seats.values()).filter(p => p.chips > 0);
@@ -726,10 +800,16 @@ function startActionTimer(tableId: string): void {
       clearInterval(timer);
       return;
     }
-    
+
+    // Broadcast turn timer every 5 seconds
+    const player = t.seats.get(t.currentTurnSeat);
+    if (player && t.actionDeadline) {
+      const secondsRemaining = Math.max(0, Math.floor((t.actionDeadline - Date.now()) / 1000));
+      maybeBroadcastTurnTimer(tableId, player.agentId, player.displayName, secondsRemaining);
+    }
+
     if (t.actionDeadline && Date.now() > t.actionDeadline) {
       // Time expired - auto-fold
-      const player = t.seats.get(t.currentTurnSeat);
       if (player) {
         const toCall = t.currentBet - player.betThisRound;
         if (toCall === 0) {
@@ -742,7 +822,7 @@ function startActionTimer(tableId: string): void {
       }
     }
   }, 1000);
-  
+
   tableTimers.set(tableId, timer);
 }
 
