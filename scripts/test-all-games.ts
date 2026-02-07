@@ -1,642 +1,413 @@
-/**
- * Clawsino Comprehensive Test Suite
- * Tests all 3 games: Poker, Coinflip, RPS
- * Includes money audit to verify no funds are lost
- */
-
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import crypto from 'crypto';
 
-const API_URL = process.env.API_URL || 'http://localhost:3001';
+const API_URL = process.env.CLAWSINO_API || 'http://localhost:3001';
 
-// Test State
-const testAgents: any[] = [];
-const testResults = {
-  poker: { handsPlayed: 0, totalRake: 0, agentResults: {} as any },
-  coinflip: { flips: 0, wins: { agent0: 0, agent1: 0 }, totalRake: 0 },
-  rps: { games: 0, wins: { agent0: 0, agent1: 0 }, totalRake: 0 }
-};
+// Test state
+let agents: Array<{
+  keypair: nacl.SignKeyPair;
+  publicKey: string;
+  agentId: string;
+  jwt: string;
+  initialBalance: number;
+}> = [];
 
-// Generate random keypair
-function generateKeypair() {
-  const keypair = nacl.sign.keyPair();
-  return {
-    publicKey: bs58.encode(keypair.publicKey),
-    secretKey: Array.from(keypair.secretKey),
-    keypair
-  };
+let testResults: Array<{ test: string; passed: boolean; details?: string }> = [];
+
+function log(msg: string) {
+  console.log(`[TEST] ${msg}`);
 }
 
-// Sign message
-function signMessage(secretKey: number[], message: string): string {
-  const keypair = nacl.sign.keyPair.fromSecretKey(new Uint8Array(secretKey));
-  const messageBytes = new TextEncoder().encode(message);
-  const signature = nacl.sign.detached(messageBytes, keypair.secretKey);
-  return bs58.encode(signature);
-}
-
-// API Helper
-async function apiCall(endpoint: string, options: any = {}) {
-  const url = `${API_URL}${endpoint}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers
-    }
-  });
-  
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API Error ${res.status}: ${text}`);
-  }
-  
-  return res.json();
-}
-
-// Authenticate agent
-async function authenticateAgent(agent: any) {
-  // Get nonce
-  const nonceRes = await apiCall('/api/auth/nonce');
-  const nonce = nonceRes.nonce;
-  
-  // Sign
-  const signature = signMessage(agent.secretKey, nonce);
-  
-  // Verify
-  const authRes = await apiCall('/api/auth/verify', {
-    method: 'POST',
-    body: JSON.stringify({
-      publicKey: agent.publicKey,
-      signature,
-      nonce
-    })
-  });
-  
-  agent.token = authRes.token;
-  agent.id = authRes.agent.id;
-  agent.wallet_address = authRes.agent.wallet_address;
-  
-  return agent;
-}
-
-// Deposit SOL to agent
-async function depositSOL(agent: any, amount: number) {
-  const res = await apiCall('/api/wallet/deposit', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${agent.token}` },
-    body: JSON.stringify({ amount, currency: 'SOL' })
-  });
-  return res;
-}
-
-// Get agent balance
-async function getBalance(agent: any) {
-  const res = await apiCall('/api/wallet', {
-    headers: { 'Authorization': `Bearer ${agent.token}` }
-  });
-  return res.balances;
-}
-
-// Print section header
-function printHeader(title: string) {
-  console.log('\n' + '='.repeat(60));
-  console.log(title);
-  console.log('='.repeat(60));
-}
-
-// Print subheader
-function printSubheader(title: string) {
-  console.log('\n--- ' + title + ' ---');
-}
-
-// ============================================================
-// POKER TESTS
-// ============================================================
-
-async function testPoker() {
-  printHeader('TESTING: TEXAS HOLD\'EM POKER');
-  
-  printSubheader('Step 1: Creating 4 Test Agents');
-  
-  for (let i = 0; i < 4; i++) {
-    const keypair = generateKeypair();
-    const agent = await authenticateAgent(keypair);
-    await depositSOL(agent, 10);
-    testAgents.push(agent);
-    console.log(`✅ Agent ${i + 1}: ${agent.wallet_address.slice(0, 8)}...${agent.wallet_address.slice(-4)} - Deposited 10 SOL`);
-  }
-  
-  printSubheader('Step 2: All 4 Join Low Stakes Table (2 SOL buyin)');
-  
-  for (let i = 0; i < 4; i++) {
-    const res = await apiCall('/api/poker/tables/low/join', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${testAgents[i].token}` },
-      body: JSON.stringify({ buyin: 2.0 })
-    });
-    console.log(`✅ Agent ${i + 1} joined table with 2 SOL`);
-  }
-  
-  printSubheader('Step 3: Playing 10 Hands');
-  
-  for (let hand = 1; hand <= 10; hand++) {
-    console.log(`\n🃏 Hand #${hand}:`);
-    
-    // Get table state
-    const tableState = await apiCall('/api/poker/tables/low/state', {
-      headers: { 'Authorization': `Bearer ${testAgents[0].token}` }
-    });
-    
-    // Play the hand with random valid actions
-    let actionsTaken = 0;
-    const maxActions = 20; // Prevent infinite loops
-    
-    while (actionsTaken < maxActions) {
-      // Check whose turn it is
-      const state = await apiCall('/api/poker/tables/low/state', {
-        headers: { 'Authorization': `Bearer ${testAgents[0].token}` }
-      });
-      
-      if (!state.hand || state.hand.phase === 'complete') {
-        break; // Hand is over
-      }
-      
-      const currentPlayerId = state.hand.currentPlayer;
-      const currentAgent = testAgents.find(a => a.id === currentPlayerId);
-      
-      if (!currentAgent) {
-        break; // No current player found
-      }
-      
-      // Get available actions
-      const availableActions = state.availableActions || ['fold', 'check', 'call'];
-      
-      // Pick random valid action
-      const action = availableActions[Math.floor(Math.random() * availableActions.length)];
-      
-      let actionBody: any = { action };
-      if (action === 'raise') {
-        const minRaise = state.hand.minRaise || 0.1;
-        actionBody.amount = minRaise + 0.05; // Small raise
-      }
-      
-      try {
-        await apiCall('/api/poker/tables/low/action', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${currentAgent.token}` },
-          body: JSON.stringify(actionBody)
-        });
-        actionsTaken++;
-      } catch (err) {
-        // Action might be invalid, skip
-        break;
-      }
-    }
-    
-    console.log(`   Actions taken: ${actionsTaken}`);
-    testResults.poker.handsPlayed++;
-    
-    // Small delay between hands
-    await new Promise(r => setTimeout(r, 100));
-  }
-  
-  printSubheader('Step 4: Verifying Poker Results');
-  
-  // Check final balances
-  for (let i = 0; i < 4; i++) {
-    const balance = await getBalance(testAgents[i]);
-    const diff = balance.sol - 8; // Started with 10, bought in for 2
-    testResults.poker.agentResults[`agent${i}`] = { finalBalance: balance.sol, profit: diff };
-    console.log(`Agent ${i + 1}: ${balance.sol.toFixed(4)} SOL (${diff >= 0 ? '+' : ''}${diff.toFixed(4)})`);
-  }
-  
-  printSubheader('Step 5: Edge Cases');
-  console.log('⚠️  Edge case tests would require more complex setup');
-  console.log('   - All-in with side pots: Requires specific betting sequences');
-  console.log('   - Heads-up: Requires 2 players only');
-  console.log('   - Everyone folds to BB: Requires all players to fold');
-  console.log('   - Split pot: Requires tied hands');
-  
-  return testResults.poker;
-}
-
-// ============================================================
-// COINFLIP TESTS
-// ============================================================
-
-async function testCoinflip() {
-  printHeader('TESTING: COINFLIP PVP');
-  
-  printSubheader('Step 1: Create and Accept Coinflip');
-  
-  // Agent 0 creates
-  const createRes = await apiCall('/api/coinflip/create', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ stake: 0.5, currency: 'SOL' })
-  });
-  
-  const gameId = createRes.game_id;
-  console.log(`✅ Created coinflip: ${gameId} for 0.5 SOL`);
-  console.log(`   Proof hash: ${createRes.proof_hash}`);
-  
-  // Agent 1 accepts
-  const acceptRes = await apiCall(`/api/coinflip/${gameId}/accept`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` }
-  });
-  
-  console.log(`✅ Agent 1 accepted`);
-  console.log(`   Winner: ${acceptRes.winner === testAgents[0].id ? 'Agent 1 (Creator)' : 'Agent 2 (Acceptor)'}`);
-  console.log(`   Payout: ${acceptRes.payout} SOL`);
-  console.log(`   Rake: ${acceptRes.rake} SOL`);
-  
-  // Verify math
-  const expectedRake = 0.5 * 2 * 0.04; // 4% of total pot
-  const expectedPayout = 1.0 - expectedRake;
-  
-  console.log(`\n📊 Verification:`);
-  console.log(`   Expected rake: ${expectedRake} SOL`);
-  console.log(`   Actual rake: ${acceptRes.rake} SOL`);
-  console.log(`   Expected payout: ${expectedPayout} SOL`);
-  console.log(`   Actual payout: ${acceptRes.payout} SOL`);
-  
-  if (Math.abs(acceptRes.rake - expectedRake) < 0.001 && Math.abs(acceptRes.payout - expectedPayout) < 0.001) {
-    console.log('✅ Math checks out!');
-  } else {
-    console.log('❌ MATH ERROR!');
-  }
-  
-  // Verify proof
-  if (acceptRes.proof_secret) {
-    const verificationHash = crypto.createHash('sha256')
-      .update(acceptRes.proof_secret + testAgents[0].wallet_address + 'coinflip')
-      .digest('hex');
-    
-    console.log(`\n🔐 Proof Verification:`);
-    console.log(`   Stored proof_hash: ${createRes.proof_hash}`);
-    console.log(`   Computed hash: ${verificationHash}`);
-    
-    if (verificationHash === createRes.proof_hash) {
-      console.log('✅ Proof is valid!');
-    } else {
-      console.log('❌ PROOF MISMATCH!');
-    }
-  }
-  
-  printSubheader('Step 2: Running 100 Coinflips');
-  
-  let agent0Wins = 0;
-  let agent1Wins = 0;
-  let totalRake = 0;
-  
-  for (let i = 0; i < 100; i++) {
-    // Create
-    const create = await apiCall('/api/coinflip/create', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-      body: JSON.stringify({ stake: 0.1, currency: 'SOL' })
-    });
-    
-    // Accept
-    const accept = await apiCall(`/api/coinflip/${create.game_id}/accept`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${testAgents[1].token}` }
-    });
-    
-    if (accept.winner === testAgents[0].id) {
-      agent0Wins++;
-    } else {
-      agent1Wins++;
-    }
-    
-    totalRake += accept.rake;
-    
-    if ((i + 1) % 20 === 0) {
-      console.log(`   Progress: ${i + 1}/100 flips`);
-    }
-  }
-  
-  testResults.coinflip.flips = 100;
-  testResults.coinflip.wins.agent0 = agent0Wins;
-  testResults.coinflip.wins.agent1 = agent1Wins;
-  testResults.coinflip.totalRake = totalRake;
-  
-  console.log(`\n📊 100 Coinflip Results:`);
-  console.log(`   Agent 1 wins: ${agent0Wins} (${(agent0Wins).toFixed(1)}%)`);
-  console.log(`   Agent 2 wins: ${agent1Wins} (${(agent1Wins).toFixed(1)}%)`);
-  console.log(`   Expected: ~50% each`);
-  console.log(`   Total rake: ${totalRake.toFixed(4)} SOL`);
-  console.log(`   Expected rake: ${(100 * 0.1 * 2 * 0.04).toFixed(4)} SOL`);
-  
-  // Check distribution is roughly 50/50 (within 15%)
-  const winDiff = Math.abs(agent0Wins - agent1Wins);
-  if (winDiff <= 15) {
-    console.log('✅ Distribution is fair (~50/50)');
-  } else {
-    console.log('⚠️  Distribution seems off, but could be variance');
-  }
-  
-  return testResults.coinflip;
-}
-
-// ============================================================
-// RPS TESTS
-// ============================================================
-
-async function testRPS() {
-  printHeader('TESTING: ROCK PAPER SCISSORS');
-  
-  printSubheader('Step 1: Create RPS Game');
-  
-  const createRes = await apiCall('/api/rps/create', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ stake: 0.25, rounds: 3, currency: 'SOL' })
-  });
-  
-  const gameId = createRes.game_id;
-  console.log(`✅ Created RPS game: ${gameId}`);
-  console.log(`   Stake: 0.25 SOL, Best of 3`);
-  
-  // Accept
-  await apiCall(`/api/rps/${gameId}/accept`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` }
-  });
-  console.log('✅ Agent 2 accepted');
-  
-  printSubheader('Step 2: Playing Rounds');
-  
-  // Round 1: A=rock, B=scissors → A wins
-  console.log('\n🎯 Round 1: A=rock, B=scissors');
-  
-  const nonceA1 = crypto.randomBytes(16).toString('hex');
-  const nonceB1 = crypto.randomBytes(16).toString('hex');
-  const hashA1 = crypto.createHash('sha256').update('rock:' + nonceA1).digest('hex');
-  const hashB1 = crypto.createHash('sha256').update('scissors:' + nonceB1).digest('hex');
-  
-  await apiCall(`/api/rps/${gameId}/commit`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ hash: hashA1 })
-  });
-  console.log('   Agent 1 committed');
-  
-  await apiCall(`/api/rps/${gameId}/commit`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` },
-    body: JSON.stringify({ hash: hashB1 })
-  });
-  console.log('   Agent 2 committed');
-  
-  await apiCall(`/api/rps/${gameId}/reveal`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ choice: 'rock', nonce: nonceA1 })
-  });
-  
-  await apiCall(`/api/rps/${gameId}/reveal`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` },
-    body: JSON.stringify({ choice: 'scissors', nonce: nonceB1 })
-  });
-  
-  console.log('   ✅ Round 1 complete - Agent 1 should win (rock beats scissors)');
-  
-  // Round 2: A=paper, B=paper → tie
-  console.log('\n🎯 Round 2: A=paper, B=paper (tie)');
-  
-  const nonceA2 = crypto.randomBytes(16).toString('hex');
-  const nonceB2 = crypto.randomBytes(16).toString('hex');
-  const hashA2 = crypto.createHash('sha256').update('paper:' + nonceA2).digest('hex');
-  const hashB2 = crypto.createHash('sha256').update('paper:' + nonceB2).digest('hex');
-  
-  await apiCall(`/api/rps/${gameId}/commit`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ hash: hashA2 })
-  });
-  
-  await apiCall(`/api/rps/${gameId}/commit`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` },
-    body: JSON.stringify({ hash: hashB2 })
-  });
-  
-  await apiCall(`/api/rps/${gameId}/reveal`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ choice: 'paper', nonce: nonceA2 })
-  });
-  
-  await apiCall(`/api/rps/${gameId}/reveal`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` },
-    body: JSON.stringify({ choice: 'paper', nonce: nonceB2 })
-  });
-  
-  console.log('   ✅ Round 2 complete - Tie (replay round)');
-  
-  // Round 3: A=scissors, B=paper → A wins and wins game
-  console.log('\n🎯 Round 3: A=scissors, B=paper');
-  
-  const nonceA3 = crypto.randomBytes(16).toString('hex');
-  const nonceB3 = crypto.randomBytes(16).toString('hex');
-  const hashA3 = crypto.createHash('sha256').update('scissors:' + nonceA3).digest('hex');
-  const hashB3 = crypto.createHash('sha256').update('paper:' + nonceB3).digest('hex');
-  
-  await apiCall(`/api/rps/${gameId}/commit`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ hash: hashA3 })
-  });
-  
-  await apiCall(`/api/rps/${gameId}/commit`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` },
-    body: JSON.stringify({ hash: hashB3 })
-  });
-  
-  const revealRes = await apiCall(`/api/rps/${gameId}/reveal`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ choice: 'scissors', nonce: nonceA3 })
-  });
-  
-  await apiCall(`/api/rps/${gameId}/reveal`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` },
-    body: JSON.stringify({ choice: 'paper', nonce: nonceB3 })
-  });
-  
-  console.log('   ✅ Round 3 complete - Agent 1 wins (scissors beats paper)');
-  console.log(`   Game winner: ${revealRes.winner === testAgents[0].id ? 'Agent 1' : 'Agent 2'}`);
-  
-  // Check game result
-  const gameResult = await apiCall(`/api/rps/${gameId}`, {
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` }
-  });
-  
-  printSubheader('Step 3: Verifying RPS Results');
-  
-  const expectedRake = 0.25 * 2 * 0.05; // 5% rake
-  const expectedPayout = 0.5 - expectedRake;
-  
-  console.log(`   Expected rake: ${expectedRake} SOL`);
-  console.log(`   Actual rake: ${gameResult.rake} SOL`);
-  console.log(`   Expected payout: ${expectedPayout} SOL`);
-  
-  if (Math.abs(gameResult.rake - expectedRake) < 0.001) {
-    console.log('✅ Rake is correct!');
-  } else {
-    console.log('❌ RAKE ERROR!');
-  }
-  
-  printSubheader('Step 4: Testing Forfeit (Invalid Reveal)');
-  console.log('   Creating new game to test forfeit...');
-  
-  const forfeitGame = await apiCall('/api/rps/create', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ stake: 0.1, rounds: 1, currency: 'SOL' })
-  });
-  
-  await apiCall(`/api/rps/${forfeitGame.game_id}/accept`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` }
-  });
-  
-  // Commit
-  const nonceF1 = crypto.randomBytes(16).toString('hex');
-  const hashF1 = crypto.createHash('sha256').update('rock:' + nonceF1).digest('hex');
-  
-  await apiCall(`/api/rps/${forfeitGame.game_id}/commit`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-    body: JSON.stringify({ hash: hashF1 })
-  });
-  
-  await apiCall(`/api/rps/${forfeitGame.game_id}/commit`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${testAgents[1].token}` },
-    body: JSON.stringify({ hash: crypto.createHash('sha256').update('paper:wrong').digest('hex') })
-  });
-  
-  // Try to reveal with wrong nonce
-  try {
-    await apiCall(`/api/rps/${forfeitGame.game_id}/reveal`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${testAgents[0].token}` },
-      body: JSON.stringify({ choice: 'rock', nonce: 'wrong_nonce_here' })
-    });
-    console.log('❌ Should have forfeited but did not!');
-  } catch (err) {
-    console.log('✅ Forfeit worked - invalid reveal detected!');
-  }
-  
-  return testResults.rps;
-}
-
-// ============================================================
-// MONEY AUDIT
-// ============================================================
-
-async function runMoneyAudit() {
-  printHeader('FINAL MONEY AUDIT');
-  
-  console.log('\n📊 Calculating all funds...\n');
-  
-  // Total deposited: 40 SOL (10 each for 4 agents)
-  const totalDeposited = 40;
-  console.log(`Total Deposited: ${totalDeposited} SOL`);
-  
-  // Sum of all agent balances
-  let totalInWallets = 0;
-  for (let i = 0; i < 4; i++) {
-    const balance = await getBalance(testAgents[i]);
-    totalInWallets += balance.sol;
-  }
-  console.log(`Total in Wallets: ${totalInWallets.toFixed(4)} SOL`);
-  
-  // Check chips on tables (would need to query poker_players table)
-  console.log(`Total on Tables: ~0 SOL (all left tables)`);
-  const totalOnTables = 0;
-  
-  // Query rake_log (would need admin endpoint)
-  console.log(`Total Rake Collected: ~${(testResults.poker.totalRake + testResults.coinflip.totalRake).toFixed(4)} SOL`);
-  const totalRake = testResults.poker.totalRake + testResults.coinflip.totalRake;
-  
-  // Withdrawals
-  console.log(`Total Withdrawn: 0 SOL`);
-  const totalWithdrawn = 0;
-  
-  // Verify invariant
-  const expected = totalInWallets + totalOnTables + totalRake + totalWithdrawn;
-  const difference = Math.abs(totalDeposited - expected);
-  
-  console.log('\n' + '='.repeat(60));
-  console.log('AUDIT RESULT:');
-  console.log('='.repeat(60));
-  console.log(`Total Deposited:    ${totalDeposited.toFixed(4)} SOL`);
-  console.log(`Total in Wallets:   ${totalInWallets.toFixed(4)} SOL`);
-  console.log(`Total on Tables:    ${totalOnTables.toFixed(4)} SOL`);
-  console.log(`Total Rake:         ${totalRake.toFixed(4)} SOL`);
-  console.log(`Total Withdrawn:    ${totalWithdrawn.toFixed(4)} SOL`);
-  console.log(`Expected Total:     ${expected.toFixed(4)} SOL`);
-  console.log(`Difference:         ${difference.toFixed(4)} SOL`);
-  
-  if (difference < 0.01) {
-    console.log('\n✅ AUDIT PASSED - All funds accounted for!');
+function assert(condition: boolean, testName: string, details?: string): boolean {
+  if (condition) {
+    log(`✅ ${testName}`);
+    testResults.push({ test: testName, passed: true });
     return true;
   } else {
-    console.log('\n❌ AUDIT FAILED - Funds are missing!');
-    console.log('This indicates a bug in the system.');
+    log(`❌ ${testName}${details ? `: ${details}` : ''}`);
+    testResults.push({ test: testName, passed: false, details });
     return false;
   }
 }
 
-// ============================================================
-// MAIN
-// ============================================================
+// Generate random Solana keypair
+function generateKeypair(): { keypair: nacl.SignKeyPair; publicKey: string } {
+  const keypair = nacl.sign.keyPair();
+  const publicKey = bs58.encode(keypair.publicKey);
+  return { keypair, publicKey };
+}
 
+// Authenticate agent via API
+async function authenticate(keypair: nacl.SignKeyPair, publicKey: string): Promise<{ agentId: string; jwt: string }> {
+  // Get nonce
+  const nonceRes = await fetch(`${API_URL}/api/auth/nonce`);
+  const { nonce } = await nonceRes.json();
+
+  // Sign nonce
+  const message = new TextEncoder().encode(nonce);
+  const signature = nacl.sign.detached(message, keypair.secretKey);
+  const sigBase58 = bs58.encode(signature);
+
+  // Verify
+  const verifyRes = await fetch(`${API_URL}/api/auth/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ publicKey, signature: sigBase58, nonce })
+  });
+
+  const data = await verifyRes.json();
+  if (!data.token) {
+    throw new Error(`Auth failed: ${data.error}`);
+  }
+
+  return { agentId: data.agent.id, jwt: data.token };
+}
+
+// API helpers
+async function apiGet(path: string, jwt?: string) {
+  const headers: Record<string, string> = {};
+  if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
+  const res = await fetch(`${API_URL}${path}`, { headers });
+  return res.json();
+}
+
+async function apiPost(path: string, body: any, jwt?: string) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
+  const res = await fetch(`${API_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body)
+  });
+  return res.json();
+}
+
+// Setup: Generate 6 agents and authenticate
+async function setup() {
+  log('Setting up 6 test agents...');
+
+  for (let i = 0; i < 6; i++) {
+    const { keypair, publicKey } = generateKeypair();
+    const { agentId, jwt } = await authenticate(keypair, publicKey);
+
+    // Deposit 50 SOL
+    await apiPost('/api/wallet/deposit', { amount: 50, currency: 'SOL' }, jwt);
+
+    agents.push({
+      keypair,
+      publicKey,
+      agentId,
+      jwt,
+      initialBalance: 50
+    });
+
+    log(`Agent ${i + 1}: ${agentId.slice(0, 8)}... deposited 50 SOL`);
+  }
+
+  log('Setup complete!\n');
+}
+
+// TEST POKER
+async function testPoker() {
+  log('=== TESTING POKER ===\n');
+
+  const tableId = 'low'; // Low Stakes table
+  const buyin = 5;
+
+  // Agents 1-4 join
+  log('Agents 1-4 joining Low Stakes table...');
+  for (let i = 0; i < 4; i++) {
+    const result = await apiPost(`/api/poker/tables/${tableId}/join`, { buyin }, agents[i].jwt);
+    assert(result.success, `Agent ${i + 1} joined table`, result.error);
+  }
+
+  // Track total buyins
+  const totalBuyins = buyin * 4;
+
+  // Play 5 hands with random actions
+  log('\nPlaying 5 hands...');
+  for (let hand = 0; hand < 5; hand++) {
+    log(`\nHand ${hand + 1}:`);
+
+    // Start hand (auto-starts when 2+ players)
+    await new Promise(r => setTimeout(r, 4000)); // Wait for auto-start
+
+    // Get state for each agent and act if their turn
+    for (let round = 0; round < 3; round++) { // 3 betting rounds max per hand
+      for (let i = 0; i < 4; i++) {
+        const state = await apiGet(`/api/poker/tables/${tableId}/state`, agents[i].jwt);
+
+        if (state.mySeat === state.currentTurnSeat && state.handInProgress) {
+          const actions = state.available_actions?.actions || [];
+          if (actions.length > 0) {
+            // Random valid action
+            const action = actions[Math.floor(Math.random() * actions.length)];
+            let body: any = { action };
+
+            if (action === 'RAISE') {
+              const minRaise = state.available_actions.min_raise || 0.5;
+              body.amount = minRaise + 0.1;
+            }
+
+            await apiPost(`/api/poker/tables/${tableId}/action`, body, agents[i].jwt);
+            log(`  Agent ${i + 1}: ${action}${body.amount ? ` ${body.amount}` : ''}`);
+          }
+        }
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    await new Promise(r => setTimeout(r, 3500)); // Wait for next hand
+  }
+
+  // Leave table
+  log('\nAgents leaving table...');
+  for (let i = 0; i < 4; i++) {
+    await apiPost(`/api/poker/tables/${tableId}/leave`, {}, agents[i].jwt);
+  }
+
+  // Check balances
+  let totalChips = 0;
+  let totalCashouts = 0;
+
+  for (let i = 0; i < 4; i++) {
+    const wallet = await apiGet('/api/wallet', agents[i].jwt);
+    const balance = wallet.balance_sol || 0;
+    const cashout = balance - (agents[i].initialBalance - buyin);
+    totalChips += 0; // Chips were converted back on leave
+    totalCashouts += cashout + buyin;
+  }
+
+  // Get rake from DB via audit
+  const audit = await apiGet('/api/admin/audit', process.env.ADMIN_API_KEY);
+  const totalRake = audit?.audit?.total_rake || 0;
+
+  // ASSERT: sum(chips + cashouts + rake) = sum(buyins)
+  const variance = Math.abs(totalCashouts + totalRake - totalBuyins);
+  assert(variance < 0.01, 'Poker money invariant', `Expected ${totalBuyins}, got ${totalCashouts + totalRake}, variance ${variance}`);
+
+  log('');
+}
+
+// TEST COINFLIP
+async function testCoinflip() {
+  log('=== TESTING COINFLIP ===\n');
+
+  // 1.0 SOL flip between agents 1+2
+  const stake = 1.0;
+
+  log('Agent 1 creating 1.0 SOL coinflip...');
+  const createResult = await apiPost('/api/coinflip/create', { stake, currency: 'SOL' }, agents[0].jwt);
+  assert(createResult.success, 'Coinflip created', createResult.error);
+
+  const gameId = createResult.game.id;
+  const proofHash = createResult.game.proof_hash;
+
+  // VERIFY: proof_hash format
+  assert(proofHash && proofHash.length === 64, 'Proof hash is valid SHA256', `Got ${proofHash}`);
+
+  log('Agent 2 accepting coinflip...');
+  const acceptResult = await apiPost(`/api/coinflip/${gameId}/accept`, {}, agents[1].jwt);
+  assert(acceptResult.success, 'Coinflip accepted', acceptResult.error);
+
+  // ASSERT: winner got 1.92, rake 0.08
+  const pot = stake * 2; // 2.0
+  const expectedRake = pot * 0.04; // 0.08
+  const expectedPayout = pot - expectedRake; // 1.92
+
+  const winnerId = acceptResult.game.winner_id;
+  const isAgent1Winner = winnerId === agents[0].agentId;
+
+  // Check winner's balance increased correctly
+  const winnerIndex = isAgent1Winner ? 0 : 1;
+  const winnerWallet = await apiGet('/api/wallet', agents[winnerIndex].jwt);
+  const winnerBalance = winnerWallet.balance_sol || 0;
+
+  // Winner should have: 50 - 1 (stake) + 1.92 (win) = 50.92
+  const expectedWinnerBalance = 50 - stake + expectedPayout;
+  const balanceDiff = Math.abs(winnerBalance - expectedWinnerBalance);
+
+  assert(balanceDiff < 0.01, `Winner got ~${expectedPayout} SOL payout`, `Expected ${expectedWinnerBalance}, got ${winnerBalance}`);
+  assert(acceptResult.game.rake === expectedRake, `Rake is ${expectedRake} SOL`, `Got ${acceptResult.game.rake}`);
+
+  // VERIFY: SHA256(secret) === proof_hash
+  const secret = acceptResult.verification.secret;
+  const computedProofHash = crypto.createHash('sha256').update(secret).digest('hex');
+  assert(computedProofHash === proofHash, 'Provably fair verification', 'SHA256(secret) !== proof_hash');
+
+  // Run 50 flips
+  log('\nRunning 50 flips for rake verification...');
+  let totalRake = 0;
+
+  for (let i = 0; i < 50; i++) {
+    const smallStake = 0.1;
+    const create = await apiPost('/api/coinflip/create', { stake: smallStake, currency: 'SOL' }, agents[0].jwt);
+    if (create.success) {
+      const accept = await apiPost(`/api/coinflip/${create.game.id}/accept`, {}, agents[1].jwt);
+      if (accept.success) {
+        totalRake += accept.game.rake || 0;
+      }
+    }
+  }
+
+  // ASSERT: total rake ≈ 4% of total volume
+  const expectedTotalRake = 50 * 0.1 * 2 * 0.04; // 50 flips * 0.1 stake * 2 players * 4%
+  const rakeVariance = Math.abs(totalRake - expectedTotalRake);
+  assert(rakeVariance < 0.5, '50 flips rake ≈ 4%', `Expected ~${expectedTotalRake}, got ${totalRake}`);
+
+  // Test cancel
+  log('\nTesting cancel...');
+  const cancelCreate = await apiPost('/api/coinflip/create', { stake: 0.5, currency: 'SOL' }, agents[0].jwt);
+  const cancelResult = await apiPost(`/api/coinflip/${cancelCreate.game.id}/cancel`, {}, agents[0].jwt);
+  assert(cancelResult.success && cancelResult.refunded_amount === 0.5, 'Cancel refunds stake', cancelResult.error);
+
+  log('');
+}
+
+// TEST RPS
+async function testRPS() {
+  log('=== TESTING RPS ===\n');
+
+  // 0.5 SOL bo3 between agents 3+4
+  const stake = 0.5;
+  const rounds = 3;
+
+  log('Agent 3 creating 0.5 SOL bo3 RPS...');
+  const createResult = await apiPost('/api/rps/create', { stake, rounds, currency: 'SOL' }, agents[2].jwt);
+  assert(createResult.success, 'RPS created', createResult.error);
+
+  const gameId = createResult.game.id;
+
+  log('Agent 4 accepting...');
+  const acceptResult = await apiPost(`/api/rps/${gameId}/accept`, {}, agents[3].jwt);
+  assert(acceptResult.success, 'RPS accepted', acceptResult.error);
+
+  // Play rounds with known choices
+  log('\nPlaying rounds...');
+
+  for (let round = 1; round <= 3; round++) {
+    log(`  Round ${round}:`);
+
+    // Agent 3 commits rock
+    const nonce3 = crypto.randomBytes(16).toString('hex');
+    const hash3 = crypto.createHash('sha256').update(`rock:${nonce3}`).digest('hex');
+    const commit3 = await apiPost(`/api/rps/${gameId}/commit`, { hash: hash3 }, agents[2].jwt);
+    assert(commit3.success, `Agent 3 committed`, commit3.error);
+
+    // Agent 4 commits paper (should win round)
+    const nonce4 = crypto.randomBytes(16).toString('hex');
+    const hash4 = crypto.createHash('sha256').update(`paper:${nonce4}`).digest('hex');
+    const commit4 = await apiPost(`/api/rps/${gameId}/commit`, { hash: hash4 }, agents[3].jwt);
+    assert(commit4.success, `Agent 4 committed`, commit4.error);
+
+    // Agent 3 reveals
+    const reveal3 = await apiPost(`/api/rps/${gameId}/reveal`, { choice: 'rock', nonce: nonce3 }, agents[2].jwt);
+    assert(reveal3.success, `Agent 3 revealed`, reveal3.error);
+
+    // Agent 4 reveals
+    const reveal4 = await apiPost(`/api/rps/${gameId}/reveal`, { choice: 'paper', nonce: nonce4 }, agents[3].jwt);
+    assert(reveal4.success, `Agent 4 revealed`, reveal4.error);
+
+    // Agent 4 should win this round
+    if (round === 1) {
+      // Paper beats rock
+      assert(reveal4.round_winner === 'acceptor', 'Paper beats rock', `Got ${reveal4.round_winner}`);
+    }
+
+    // If game ended early, break
+    if (reveal4.game_complete) {
+      log(`  Game complete! Winner: ${reveal4.final_winner?.slice(0, 8)}...`);
+      break;
+    }
+  }
+
+  // Get final game state
+  const game = await apiGet(`/api/rps/${gameId}`);
+
+  // ASSERT: winner got 0.95, rake 0.05 (5% of 1.0 pot)
+  const expectedRake = stake * 2 * 0.05; // 0.05
+  const expectedPayout = stake * 2 - expectedRake; // 0.95
+
+  assert(game.rake === expectedRake, `Rake is ${expectedRake} SOL`, `Got ${game.rake}`);
+
+  // Test invalid reveal → forfeit
+  log('\nTesting invalid reveal (forfeit)...');
+  const badGame = await apiPost('/api/rps/create', { stake: 0.1, rounds: 1, currency: 'SOL' }, agents[2].jwt);
+  await apiPost(`/api/rps/${badGame.game.id}/accept`, {}, agents[3].jwt);
+
+  const badNonce = crypto.randomBytes(16).toString('hex');
+  const badHash = crypto.createHash('sha256').update(`rock:${badNonce}`).digest('hex');
+  await apiPost(`/api/rps/${badGame.game.id}/commit`, { hash: badHash }, agents[2].jwt);
+
+  const wrongNonce = crypto.randomBytes(16).toString('hex');
+  const badReveal = await apiPost(`/api/rps/${badGame.game.id}/reveal`, { choice: 'rock', nonce: wrongNonce }, agents[2].jwt);
+
+  assert(!badReveal.success, 'Invalid reveal is rejected', 'Should have failed');
+  assert(badReveal.error?.includes('forfeit') || badReveal.error?.includes('hash'), 'Forfeit on hash mismatch', badReveal.error);
+
+  log('');
+}
+
+// TEST AUDIT
+async function testAudit() {
+  log('=== TESTING AUDIT ===\n');
+
+  const adminKey = process.env.ADMIN_API_KEY;
+  if (!adminKey) {
+    log('⚠️  ADMIN_API_KEY not set, skipping audit');
+    return;
+  }
+
+  const audit = await apiGet('/api/admin/audit', adminKey);
+
+  log('Audit breakdown:');
+  log(`  Total deposited: ${audit.audit.total_deposited} SOL`);
+  log(`  Total in balances: ${audit.audit.total_in_balances} SOL`);
+  log(`  Total on tables: ${audit.audit.total_on_tables} SOL`);
+  log(`  Total in coinflip escrow: ${audit.audit.total_in_coinflip_escrow} SOL`);
+  log(`  Total in RPS escrow: ${audit.audit.total_in_rps_escrow} SOL`);
+  log(`  Total rake: ${audit.audit.total_rake} SOL`);
+  log(`  Total withdrawn: ${audit.audit.total_withdrawn} SOL`);
+  log(`  Expected total: ${audit.audit.expected_total} SOL`);
+  log(`  Variance: ${audit.audit.variance} SOL`);
+
+  assert(audit.balanced === true, 'Money invariant balanced', `Variance: ${audit.audit.variance}`);
+
+  log('');
+}
+
+// Main
 async function main() {
-  console.log('🦞 CLAWCASINO COMPREHENSIVE TEST SUITE');
-  console.log('=====================================\n');
-  
+  console.log('🎰 CLAWSINO FULL TEST SUITE\n');
+  console.log(`API: ${API_URL}\n`);
+
   try {
-    // Check API is up
-    console.log('Checking API connection...');
-    const health = await apiCall('/api/health');
-    console.log(`✅ API Online: ${health.status}\n`);
-    
-    // Run tests
+    await setup();
     await testPoker();
     await testCoinflip();
     await testRPS();
-    
-    // Final audit
-    const auditPassed = await runMoneyAudit();
-    
-    // Final summary
-    printHeader('TEST SUMMARY');
-    console.log(`Poker Hands Played: ${testResults.poker.handsPlayed}`);
-    console.log(`Coinflips: ${testResults.coinflip.flips}`);
-    console.log(`RPS Games: ${testResults.rps.games}`);
-    console.log(`\nMoney Audit: ${auditPassed ? '✅ PASSED' : '❌ FAILED'}`);
-    
-    if (auditPassed) {
-      console.log('\n🎉 All tests passed! System is ready for production.');
+    await testAudit();
+
+    // Summary
+    console.log('\n=== TEST SUMMARY ===\n');
+    const passed = testResults.filter(r => r.passed).length;
+    const total = testResults.length;
+
+    console.log(`Passed: ${passed}/${total}`);
+
+    if (passed === total) {
+      console.log('\n✅ ALL TESTS PASSED');
       process.exit(0);
     } else {
-      console.log('\n⚠️  Audit failed. Review the system before going live.');
+      console.log('\n❌ FAILED');
+      testResults.filter(r => !r.passed).forEach(r => {
+        console.log(`  - ${r.test}${r.details ? `: ${r.details}` : ''}`);
+      });
       process.exit(1);
     }
-    
   } catch (err) {
-    console.error('\n❌ Test suite failed:', err);
+    console.error('\n❌ TEST SUITE CRASHED:', err);
     process.exit(1);
   }
 }
