@@ -1,316 +1,269 @@
 import { Router } from 'express';
-import { requireAdmin } from '../middleware/auth';
-import { db } from '../db';
-import { runBackgroundJobs } from '../cron';
+import { getDatabase } from '../db';
+import { getAllTables } from '../games/poker/table';
 
 const router = Router();
 
-// Main admin dashboard
-router.get('/dashboard', requireAdmin, (req, res) => {
+// Admin middleware - check ADMIN_API_KEY
+function requireAdmin(req: any, res: any, next: any) {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized - Bearer token required' });
+  }
+  
+  const token = authHeader.slice(7);
+  
+  if (token !== process.env.ADMIN_API_KEY) {
+    return res.status(403).json({ error: 'Forbidden - Invalid admin key' });
+  }
+  
+  next();
+}
+
+// All admin routes require admin key
+router.use(requireAdmin);
+
+// GET /api/admin/dashboard - Admin dashboard stats
+router.get('/dashboard', (req, res) => {
   try {
-    const now = Math.floor(Date.now() / 1000);
-    const dayAgo = now - 24 * 60 * 60;
-    const weekAgo = now - 7 * 24 * 60 * 60;
-    const monthAgo = now - 30 * 24 * 60 * 60;
-
-    // Total agents
-    const totalAgents = db.prepare('SELECT COUNT(*) as count FROM agents').get() as any;
-
-    // Agents online (active sessions)
-    const agentsOnline = db.prepare(`
-      SELECT COUNT(DISTINCT id) as count FROM agents 
-      WHERE last_active_at > ?
-    `).get(now - 300).get() as any; // 5 min
-
-    // Active tables with players
-    const activeTables = db.prepare(`
-      SELECT COUNT(DISTINCT table_id) as count FROM poker_players
-    `).get() as any;
-
-    // Rake stats
-    const rakeToday = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol,
-        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc
-      FROM rake_log WHERE created_at > ?
-    `).get(dayAgo) as any;
-
-    const rakeWeek = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol,
-        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc
-      FROM rake_log WHERE created_at > ?
-    `).get(weekAgo) as any;
-
-    const rakeMonth = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol,
-        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc
-      FROM rake_log WHERE created_at > ?
-    `).get(monthAgo) as any;
-
-    const rakeAllTime = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol,
-        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc
-      FROM rake_log
-    `).get() as any;
-
-    // Game counts today
-    const gamesToday = db.prepare(`
-      SELECT 
-        game_type,
-        COUNT(*) as count
-      FROM rake_log WHERE created_at > ?
-      GROUP BY game_type
-    `).all(dayAgo) as any[];
-
-    // Top tables by rake today
-    const topTables = db.prepare(`
-      SELECT 
-        pt.name,
-        pt.currency,
-        SUM(ph.rake) as total_rake,
-        COUNT(ph.id) as hands_played
-      FROM poker_hands ph
-      JOIN poker_tables pt ON ph.table_id = pt.id
-      WHERE ph.finished_at > ?
-      GROUP BY ph.table_id
-      ORDER BY total_rake DESC
-      LIMIT 5
-    `).all(dayAgo) as any[];
-
-    // Top agents by volume today
-    const topAgents = db.prepare(`
-      SELECT 
-        a.display_name,
-        a.wallet_address,
-        COUNT(DISTINCT t.id) as games_played,
-        SUM(CASE WHEN t.type LIKE '%win%' THEN t.amount ELSE 0 END) as winnings
-      FROM transactions t
-      JOIN agents a ON t.agent_id = a.id
-      WHERE t.created_at > ? AND t.type IN ('coinflip_win', 'coinflip_loss', 'rps_win', 'rps_loss')
-      GROUP BY t.agent_id
-      ORDER BY games_played DESC
-      LIMIT 5
-    `).all(dayAgo) as any[];
-
-    // Hourly rake chart (last 24 hours)
-    const hourlyRake = db.prepare(`
-      SELECT 
-        strftime('%H', datetime(created_at, 'unixepoch')) as hour,
-        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol,
-        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc
-      FROM rake_log WHERE created_at > ?
-      GROUP BY hour
-      ORDER BY hour
-    `).all(dayAgo) as any[];
-
+    const db = getDatabase();
+    const now = Date.now();
+    
+    // Time ranges
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayStartTs = todayStart.getTime();
+    
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() - 7);
+    const weekStartTs = weekStart.getTime();
+    
+    const monthStart = new Date();
+    monthStart.setDate(monthStart.getDate() - 30);
+    const monthStartTs = monthStart.getTime();
+    
+    // Revenue stats (rake)
+    const revenueToday = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total 
+      FROM rake_log 
+      WHERE currency = 'SOL' AND created_at >= ?
+    `).get(todayStartTs);
+    
+    const revenueWeek = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total 
+      FROM rake_log 
+      WHERE currency = 'SOL' AND created_at >= ?
+    `).get(weekStartTs);
+    
+    const revenueMonth = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total 
+      FROM rake_log 
+      WHERE currency = 'SOL' AND created_at >= ?
+    `).get(monthStartTs);
+    
+    const revenueAllTime = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total 
+      FROM rake_log 
+      WHERE currency = 'SOL'
+    `).get();
+    
+    // Agent stats
+    const totalAgents = db.prepare(`SELECT COUNT(*) as count FROM agents`).get();
+    
+    const activeToday = db.prepare(`
+      SELECT COUNT(*) as count FROM agents WHERE last_active >= ?
+    `).get(todayStartTs);
+    
+    const newToday = db.prepare(`
+      SELECT COUNT(*) as count FROM agents WHERE created_at >= ?
+    `).get(todayStartTs);
+    
+    // Game stats for today
+    const pokerToday = db.prepare(`
+      SELECT COUNT(*) as count FROM poker_hands 
+      WHERE completed_at >= ?
+    `).get(todayStartTs);
+    
+    const coinflipToday = db.prepare(`
+      SELECT COUNT(*) as count FROM coinflip_games 
+      WHERE status = 'completed' AND completed_at >= ?
+    `).get(todayStartTs);
+    
+    const rpsToday = db.prepare(`
+      SELECT COUNT(*) as count FROM rps_games 
+      WHERE status IN ('completed', 'forfeited') AND completed_at >= ?
+    `).get(todayStartTs);
+    
     res.json({
-      overview: {
-        totalAgents: totalAgents.count,
-        agentsOnline: agentsOnline?.count || 0,
-        activeTables: activeTables.count,
-        gamesToday: gamesToday.reduce((sum, g) => sum + g.count, 0)
+      revenue: {
+        today_sol: revenueToday?.total || 0,
+        week_sol: revenueWeek?.total || 0,
+        month_sol: revenueMonth?.total || 0,
+        all_time_sol: revenueAllTime?.total || 0
       },
-      rake: {
-        today: { sol: rakeToday?.sol || 0, usdc: rakeToday?.usdc || 0 },
-        thisWeek: { sol: rakeWeek?.sol || 0, usdc: rakeWeek?.usdc || 0 },
-        thisMonth: { sol: rakeMonth?.sol || 0, usdc: rakeMonth?.usdc || 0 },
-        allTime: { sol: rakeAllTime?.sol || 0, usdc: rakeAllTime?.usdc || 0 }
+      agents: {
+        total: totalAgents?.count || 0,
+        active_today: activeToday?.count || 0,
+        new_today: newToday?.count || 0
       },
-      topTables: topTables.map(t => ({
-        name: t.name,
-        currency: t.currency,
-        totalRake: t.total_rake,
-        handsPlayed: t.hands_played
-      })),
-      topAgents: topAgents.map(a => ({
-        name: a.display_name || `${a.wallet_address.slice(0, 4)}...${a.wallet_address.slice(-4)}`,
-        gamesPlayed: a.games_played,
-        winnings: a.winnings
-      })),
-      hourlyRake: hourlyRake.map(h => ({
-        hour: parseInt(h.hour),
-        sol: h.sol || 0,
-        usdc: h.usdc || 0
-      }))
+      games: {
+        poker_hands_today: pokerToday?.count || 0,
+        coinflips_today: coinflipToday?.count || 0,
+        rps_today: rpsToday?.count || 0
+      }
     });
-  } catch (error) {
-    console.error('Admin dashboard error:', error);
-    res.status(500).json({ error: 'Failed to load dashboard' });
+  } catch (err) {
+    console.error('Admin dashboard error:', err);
+    res.status(500).json({ error: 'Failed to fetch dashboard data' });
   }
 });
 
-// All agents
-router.get('/agents', requireAdmin, (req, res) => {
+// GET /api/admin/audit - Full money invariant audit
+router.get('/audit', (req, res) => {
   try {
-    const agents = db.prepare(`
-      SELECT id, wallet_address, display_name, balance_sol, balance_usdc, 
-             games_played, total_profit, created_at
-      FROM agents
-      ORDER BY created_at DESC
-    `).all();
-
-    res.json({ agents });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load agents' });
-  }
-});
-
-// Recent transactions
-router.get('/transactions', requireAdmin, (req, res) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const db = getDatabase();
     
-    const transactions = db.prepare(`
-      SELECT t.*, a.display_name, a.wallet_address
-      FROM transactions t
-      JOIN agents a ON t.agent_id = a.id
-      ORDER BY t.created_at DESC
-      LIMIT ?
-    `).all(limit);
-
-    res.json({ transactions });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load transactions' });
-  }
-});
-
-// Rake by game type
-router.get('/rake/by-game', requireAdmin, (req, res) => {
-  try {
-    const rakeByGame = db.prepare(`
-      SELECT 
-        game_type,
-        SUM(amount) as total_rake,
-        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol_rake,
-        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc_rake,
-        COUNT(*) as game_count
-      FROM rake_log
-      GROUP BY game_type
-    `).all();
-
-    res.json({ rakeByGame });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load rake data' });
-  }
-});
-
-// Math invariant audit
-router.get('/audit', requireAdmin, (req, res) => {
-  try {
-    // total_money_deposited = sum(all_agent_balances) + sum(all_chips_on_tables) + sum(all_rake_collected) + sum(all_withdrawals)
+    // Total deposits
+    const depositsResult = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total 
+      FROM transactions 
+      WHERE type = 'deposit' AND currency = 'SOL'
+    `).get();
+    const totalDeposited = depositsResult?.total || 0;
     
-    // 1. Sum all agent balances (SOL and USDC)
-    const agentBalances = db.prepare(`
-      SELECT SUM(balance_sol) as sol, SUM(balance_usdc) as usdc FROM agents
-    `).get() as any;
-
-    // 2. Sum all chips on tables
-    const tableBalances = db.prepare(`
-      SELECT SUM(chips) as chips FROM poker_players
-    `).get() as any;
-
-    // 3. Sum all rake collected
-    const rake = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol_rake,
-        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc_rake
-      FROM rake_log
-    `).get() as any;
-
-    // 4. Sum all deposits (in)
-    const deposits = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN currency = 'SOL' AND amount > 0 THEN amount ELSE 0 END) as sol_deposits,
-        SUM(CASE WHEN currency = 'USDC' AND amount > 0 THEN amount ELSE 0 END) as usdc_deposits
-      FROM transactions
-      WHERE type = 'deposit'
-    `).get() as any;
-
-    // 5. Sum all withdrawals (out)
-    const withdrawals = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN currency = 'SOL' AND amount > 0 THEN amount ELSE 0 END) as sol_withdrawals,
-        SUM(CASE WHEN currency = 'USDC' AND amount > 0 THEN amount ELSE 0 END) as usdc_withdrawals
-      FROM transactions
-      WHERE type = 'withdrawal'
-    `).get() as any;
-
-    // Calculate expected balance
-    const solExpected = (deposits.sol_deposits || 0) - (withdrawals.sol_withdrawals || 0);
-    const usdcExpected = (deposits.usdc_deposits || 0) - (withdrawals.usdc_withdrawals || 0);
-
-    // Calculate actual balance (held by system)
-    const solActual = (agentBalances.sol || 0) + (tableBalances.chips || 0) + (rake.sol_rake || 0);
-    const usdcActual = (agentBalances.usdc || 0) + (rake.usdc_rake || 0); // USDC not used for poker chips yet
-
+    // Total balances (all agents)
+    const balancesResult = db.prepare(`
+      SELECT COALESCE(SUM(balance_sol), 0) as total FROM agents
+    `).get();
+    const totalInBalances = balancesResult?.total || 0;
+    
+    // Total chips on poker tables
+    const tables = getAllTables();
+    let totalOnTables = 0;
+    for (const table of tables) {
+      for (const player of table.seats.values()) {
+        totalOnTables += player.chips + player.betThisRound;
+      }
+    }
+    
+    // Total escrowed in open coinflip games
+    const coinflipEscrow = db.prepare(`
+      SELECT COALESCE(SUM(stake), 0) as total 
+      FROM coinflip_games 
+      WHERE status IN ('open', 'completed') AND currency = 'SOL'
+    `).get();
+    const totalInCoinflipEscrow = coinflipEscrow?.total || 0;
+    
+    // Total escrowed in active RPS games
+    const rpsEscrow = db.prepare(`
+      SELECT COALESCE(SUM(stake), 0) as total 
+      FROM rps_games 
+      WHERE status IN ('open', 'committing', 'revealing') AND currency = 'SOL'
+    `).get();
+    const totalInRPSEscrow = rpsEscrow?.total || 0;
+    
+    // Total rake
+    const rakeResult = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total 
+      FROM rake_log 
+      WHERE currency = 'SOL'
+    `).get();
+    const totalRake = rakeResult?.total || 0;
+    
+    // Total withdrawals
+    const withdrawalsResult = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total 
+      FROM transactions 
+      WHERE type = 'withdrawal' AND currency = 'SOL'
+    `).get();
+    const totalWithdrawn = withdrawalsResult?.total || 0;
+    
+    // Calculate expected total
+    const expectedTotal = totalInBalances + totalOnTables + totalInCoinflipEscrow + totalInRPSEscrow + totalRake + totalWithdrawn;
+    
+    // Check if balanced (allow small floating point difference)
+    const balanced = Math.abs(totalDeposited - expectedTotal) < 0.0001;
+    
     res.json({
       audit: {
-        sol: {
-          expected: solExpected,
-          actual: solActual,
-          difference: solActual - solExpected,
-          balanced: Math.abs(solActual - solExpected) < 0.0001
-        },
-        usdc: {
-          expected: usdcExpected,
-          actual: usdcActual,
-          difference: usdcActual - usdcExpected,
-          balanced: Math.abs(usdcActual - usdcExpected) < 0.0001
-        }
+        total_deposited: totalDeposited,
+        total_in_balances: totalInBalances,
+        total_on_tables: totalOnTables,
+        total_in_coinflip_escrow: totalInCoinflipEscrow,
+        total_in_rps_escrow: totalInRPSEscrow,
+        total_rake: totalRake,
+        total_withdrawn: totalWithdrawn,
+        expected_total: expectedTotal,
+        balanced,
+        variance: totalDeposited - expectedTotal
       },
-      breakdown: {
-        agentBalances: { sol: agentBalances.sol || 0, usdc: agentBalances.usdc || 0 },
-        tableBalances: { chips: tableBalances.chips || 0 },
-        rakeCollected: { sol: rake.sol_rake || 0, usdc: rake.usdc_rake || 0 },
-        deposits: { sol: deposits.sol_deposits || 0, usdc: deposits.usdc_deposits || 0 },
-        withdrawals: { sol: withdrawals.sol_withdrawals || 0, usdc: withdrawals.usdc_withdrawals || 0 }
-      },
-      passed: Math.abs(solActual - solExpected) < 0.0001 && Math.abs(usdcActual - usdcExpected) < 0.0001
+      pass: balanced
     });
-  } catch (error) {
-    res.status(500).json({ error: 'Audit failed' });
+  } catch (err) {
+    console.error('Admin audit error:', err);
+    res.status(500).json({ error: 'Failed to run audit' });
   }
 });
 
-// Daily rake breakdown (last 30 days)
-router.get('/rake/daily', requireAdmin, (req, res) => {
+// GET /api/admin/rake/daily - Last 30 days of rake by game type
+router.get('/rake/daily', (req, res) => {
   try {
-    const days = parseInt(req.query.days as string) || 30;
-    const since = Math.floor(Date.now() / 1000) - (days * 24 * 60 * 60);
-
-    const dailyRake = db.prepare(`
+    const db = getDatabase();
+    
+    // Get last 30 days of rake data
+    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    
+    const rakeData = db.prepare(`
       SELECT 
-        date(datetime(created_at, 'unixepoch')) as date,
+        date(created_at / 1000, 'unixepoch') as day,
         game_type,
-        SUM(amount) as rake,
-        SUM(CASE WHEN currency = 'SOL' THEN amount ELSE 0 END) as sol,
-        SUM(CASE WHEN currency = 'USDC' THEN amount ELSE 0 END) as usdc,
-        COUNT(*) as games
+        COALESCE(SUM(amount), 0) as total_rake,
+        COUNT(*) as game_count
       FROM rake_log
-      WHERE created_at > ?
-      GROUP BY date, game_type
-      ORDER BY date DESC
-    `).all(since);
-
+      WHERE created_at >= ? AND currency = 'SOL'
+      GROUP BY day, game_type
+      ORDER BY day DESC, game_type
+    `).all(thirtyDaysAgo);
+    
+    // Format into daily breakdown
+    const dailyBreakdown: Record<string, any> = {};
+    
+    for (const row of rakeData) {
+      if (!dailyBreakdown[row.day]) {
+        dailyBreakdown[row.day] = {
+          date: row.day,
+          poker: 0,
+          coinflip: 0,
+          rps: 0,
+          total: 0,
+          games: 0
+        };
+      }
+      
+      dailyBreakdown[row.day][row.game_type] = row.total_rake;
+      dailyBreakdown[row.day].total += row.total_rake;
+      dailyBreakdown[row.day].games += row.game_count;
+    }
+    
+    // Convert to array and sort by date
+    const result = Object.values(dailyBreakdown).sort((a: any, b: any) => 
+      new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+    
     res.json({
-      days,
-      daily: dailyRake
+      days: result,
+      summary: {
+        total_rake_30d: result.reduce((sum: number, day: any) => sum + day.total, 0),
+        total_games_30d: result.reduce((sum: number, day: any) => sum + day.games, 0),
+        avg_daily_rake: result.length > 0 
+          ? result.reduce((sum: number, day: any) => sum + day.total, 0) / result.length 
+          : 0
+      }
     });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to load daily rake' });
-  }
-});
-
-// Trigger background jobs
-router.post('/cron/run', requireAdmin, (req, res) => {
-  try {
-    runBackgroundJobs();
-    res.json({ success: true, message: 'Background jobs executed' });
-  } catch (error) {
-    res.status(500).json({ error: 'Cron failed' });
+  } catch (err) {
+    console.error('Admin rake daily error:', err);
+    res.status(500).json({ error: 'Failed to fetch rake data' });
   }
 });
 

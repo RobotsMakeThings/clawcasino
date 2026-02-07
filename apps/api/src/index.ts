@@ -16,6 +16,7 @@ import pokerRoutes from './routes/poker';
 import coinflipRoutes from './routes/coinflip';
 import rpsRoutes from './routes/rps';
 import agentRoutes from './routes/agent';
+import adminRoutes from './routes/admin';
 
 // Import WebSocket handler
 import { handleWebSocketConnection } from './ws';
@@ -55,6 +56,9 @@ app.use('/api/rps', rpsRoutes);
 
 // Agent profile routes
 app.use('/api/agent', agentRoutes);
+
+// Admin routes
+app.use('/api/admin', adminRoutes);
 
 // WebSocket
 wss.on('connection', handleWebSocketConnection);
