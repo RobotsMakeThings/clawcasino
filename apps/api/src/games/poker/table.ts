@@ -751,19 +751,25 @@ export function getPublicState(tableId: string): any {
   const table = activeTables.get(tableId);
   if (!table) return null;
   
-  return {
-    id: table.id,
-    config: table.config,
-    seats: Array.from(table.seats.entries()).map(([seat, player]) => ({
+  // Sort seats by seat number for consistent ordering
+  const sortedSeats = Array.from(table.seats.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([seat, player]) => ({
       seatNumber: seat,
       agentId: player.agentId,
       displayName: player.displayName,
       chips: player.chips,
       betThisRound: player.betThisRound,
+      totalBetThisHand: player.totalBetThisHand,
       status: player.status,
       lastAction: player.lastAction,
       cardCount: player.holeCards.length  // Only show count, not cards
-    })),
+    }));
+  
+  return {
+    id: table.id,
+    config: table.config,
+    seats: sortedSeats,
     dealerSeat: table.dealerSeat,
     communityCards: table.communityCards,
     pot: table.pot,
@@ -782,10 +788,10 @@ export function getPublicState(tableId: string): any {
 export function getStateForAgent(tableId: string, agentId: string): any {
   const table = activeTables.get(tableId);
   if (!table) return null;
-  
+
   const publicState = getPublicState(tableId);
   if (!publicState) return null;
-  
+
   // Find this agent's seat
   let mySeat = -1;
   for (const [seat, player] of table.seats) {
@@ -794,20 +800,31 @@ export function getStateForAgent(tableId: string, agentId: string): any {
       break;
     }
   }
-  
+
   if (mySeat === -1) {
-    return publicState;  // Observer view
+    return publicState; // Observer view
   }
-  
+
   const myPlayer = table.seats.get(mySeat)!;
-  
+
   return {
     ...publicState,
     mySeat,
     myHoleCards: myPlayer.holeCards.map(cardToString),
-    availableActions: mySeat === table.currentTurnSeat && table.handInProgress
-      ? getAvailableActions(table, myPlayer)
-      : []
+    availableActions:
+      mySeat === table.currentTurnSeat && table.handInProgress
+        ? getAvailableActions(table, myPlayer)
+        : [],
+    // Include formatted current_turn for convenience
+    current_turn:
+      table.currentTurnSeat >= 0
+        ? {
+            seat: table.currentTurnSeat,
+            agent_id: table.seats.get(table.currentTurnSeat)?.agentId,
+            display_name: table.seats.get(table.currentTurnSeat)?.displayName,
+            deadline: table.actionDeadline,
+          }
+        : null,
   };
 }
 
