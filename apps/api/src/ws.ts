@@ -439,9 +439,133 @@ const lastTimerBroadcast = new Map<string, number>();
 export function maybeBroadcastTurnTimer(tableId: string, agentId: string, displayName: string, secondsRemaining: number): void {
   const now = Date.now();
   const lastBroadcast = lastTimerBroadcast.get(tableId) || 0;
-  
+
   if (now - lastBroadcast >= 5000) {
     broadcastTurnTimer(tableId, agentId, displayName, secondsRemaining);
     lastTimerBroadcast.set(tableId, now);
   }
+}
+
+// ==================== RPS BROADCASTS ====================
+
+/**
+ * Broadcast RPS created event
+ */
+export function broadcastRPSCreated(game: any): void {
+  broadcastGlobal({
+    type: 'rps_created',
+    game: {
+      id: game.id,
+      creator_id: game.creator_id,
+      creator_name: game.creator_name,
+      stake: game.stake,
+      currency: game.currency,
+      rounds: game.rounds,
+      expires_at: game.expires_at,
+      created_at: game.created_at
+    }
+  });
+}
+
+/**
+ * Broadcast RPS committed event
+ */
+export function broadcastRPSCommitted(game: any): void {
+  broadcastGlobal({
+    type: 'rps_committed',
+    game: {
+      id: game.id,
+      status: game.status,
+      current_round: game.current_round,
+      creator_score: game.creator_score,
+      acceptor_score: game.acceptor_score,
+      round_data: game.round_data.map((r: any) => ({
+        round: r.round,
+        creator_committed: !!r.creator_hash,
+        acceptor_committed: !!r.acceptor_hash,
+        creator_revealed: !!r.creator_choice,
+        acceptor_revealed: !!r.acceptor_choice,
+        phase_deadline: r.phase_deadline
+      }))
+    }
+  });
+}
+
+/**
+ * Broadcast RPS revealed event
+ */
+export function broadcastRPSRevealed(game: any): void {
+  broadcastGlobal({
+    type: 'rps_revealed',
+    game: {
+      id: game.id,
+      status: game.status,
+      current_round: game.current_round,
+      creator_score: game.creator_score,
+      acceptor_score: game.acceptor_score
+    }
+  });
+}
+
+/**
+ * Broadcast RPS round complete
+ */
+export function broadcastRPSRoundComplete(game: any, roundWinner: string): void {
+  const currentRound = game.round_data[game.current_round - 1] || game.round_data[game.round_data.length - 1];
+
+  broadcastGlobal({
+    type: 'rps_round_complete',
+    game: {
+      id: game.id,
+      current_round: game.current_round,
+      creator_score: game.creator_score,
+      acceptor_score: game.acceptor_score,
+      round_winner: roundWinner,
+      creator_choice: currentRound?.creator_choice,
+      acceptor_choice: currentRound?.acceptor_choice
+    }
+  });
+}
+
+/**
+ * Broadcast RPS game complete
+ */
+export function broadcastRPSGameComplete(game: any, finalWinner: string): void {
+  broadcastGlobal({
+    type: 'rps_game_complete',
+    game: {
+      id: game.id,
+      winner_id: finalWinner,
+      creator_score: game.creator_score,
+      acceptor_score: game.acceptor_score,
+      rake: game.rake,
+      completed_at: game.completed_at
+    }
+  });
+}
+
+/**
+ * Broadcast RPS cancelled
+ */
+export function broadcastRPSCancelled(gameId: string, cancelledBy: string): void {
+  broadcastGlobal({
+    type: 'rps_cancelled',
+    game_id: gameId,
+    cancelled_by: cancelledBy
+  });
+}
+
+/**
+ * Broadcast RPS forfeited
+ */
+export function broadcastRPSForfeited(game: any, forfeiterId: string, reason: string): void {
+  broadcastGlobal({
+    type: 'rps_forfeited',
+    game: {
+      id: game.id,
+      winner_id: game.winner_id,
+      forfeiter_id: forfeiterId,
+      reason
+    }
+  });
 }
