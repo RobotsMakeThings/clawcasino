@@ -198,6 +198,74 @@ export function sendHoleCards(tableId: string, agentId: string, cards: string[])
   });
 }
 
+// ==================== COINFLIP BROADCASTS ====================
+
+/**
+ * Global broadcast to all connected clients
+ */
+function broadcastGlobal(event: any): void {
+  const message = JSON.stringify(event);
+  for (const [ws] of authenticatedConnections) {
+    if (ws.readyState === 1) { // WebSocket.OPEN
+      ws.send(message);
+    }
+  }
+}
+
+/**
+ * Broadcast coinflip created event
+ */
+export function broadcastCoinflipCreated(game: any): void {
+  broadcastGlobal({
+    type: 'coinflip_created',
+    game: {
+      id: game.id,
+      creator_id: game.creator_id,
+      creator_name: game.creator_name,
+      stake: game.stake,
+      currency: game.currency,
+      proof_hash: game.proof_hash,
+      expires_at: game.expires_at,
+      created_at: game.created_at
+    }
+  });
+}
+
+/**
+ * Broadcast coinflip result (completed)
+ */
+export function broadcastCoinflipResult(game: any, winnerId: string, winnerName: string): void {
+  broadcastGlobal({
+    type: 'coinflip_result',
+    game: {
+      id: game.id,
+      creator_id: game.creator_id,
+      creator_name: game.creator_name,
+      acceptor_id: game.acceptor_id,
+      acceptor_name: game.acceptor_name,
+      stake: game.stake,
+      currency: game.currency,
+      winner_id: winnerId,
+      winner_name: winnerName,
+      result_hash: game.result_hash,
+      secret: game.secret,
+      completed_at: game.completed_at,
+      rake: game.rake
+    }
+  });
+}
+
+/**
+ * Broadcast coinflip cancelled
+ */
+export function broadcastCoinflipCancelled(gameId: string, cancelledBy: string): void {
+  broadcastGlobal({
+    type: 'coinflip_cancelled',
+    game_id: gameId,
+    cancelled_by: cancelledBy
+  });
+}
+
 /**
  * Broadcast player joined event
  */
