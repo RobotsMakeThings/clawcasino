@@ -6,6 +6,16 @@ import fs from 'fs';
 const mockStorage: Map<string, any[]> = new Map();
 let mockIdCounter = 1;
 
+// Seed data for poker tables
+const DEFAULT_POKER_TABLES = [
+  { id: 'nano', name: 'Nano Grind', small_blind: 0.005, big_blind: 0.01, min_buyin: 0.2, max_buyin: 2.0, max_players: 6, currency: 'SOL', status: 'active', hand_count: 0, total_rake: 0 },
+  { id: 'micro', name: 'Micro Stakes', small_blind: 0.01, big_blind: 0.02, min_buyin: 0.5, max_buyin: 5.0, max_players: 6, currency: 'SOL', status: 'active', hand_count: 0, total_rake: 0 },
+  { id: 'low', name: 'Low Stakes', small_blind: 0.05, big_blind: 0.10, min_buyin: 2.0, max_buyin: 20.0, max_players: 6, currency: 'SOL', status: 'active', hand_count: 0, total_rake: 0 },
+  { id: 'mid', name: 'Mid Stakes', small_blind: 0.25, big_blind: 0.50, min_buyin: 10.0, max_buyin: 100.0, max_players: 6, currency: 'SOL', status: 'active', hand_count: 0, total_rake: 0 },
+  { id: 'high', name: 'High Roller', small_blind: 1.00, big_blind: 2.00, min_buyin: 50.0, max_buyin: 500.0, max_players: 6, currency: 'SOL', status: 'active', hand_count: 0, total_rake: 0 },
+  { id: 'degen', name: 'Degen Table', small_blind: 5.00, big_blind: 10.00, min_buyin: 200.0, max_buyin: 2000.0, max_players: 6, currency: 'SOL', status: 'active', hand_count: 0, total_rake: 0 }
+];
+
 // Database interface mimicking better-sqlite3
 class Statement {
   private sql: string;
@@ -68,11 +78,20 @@ class Statement {
     const table = this.getTableName();
     const rows = mockStorage.get(table) || [];
     
-    // Find matching row
+    // Find matching row by id or other fields
     return rows.find(row => {
       return params.some((param, idx) => {
-        if (idx === 0) return row.wallet_address === param || row.id === param;
-        if (idx === 1) return row.id === param;
+        if (param === undefined || param === null) return false;
+        if (idx === 0) {
+          // First param could be id, wallet_address, etc
+          return row.id === param || 
+                 row.wallet_address === param || 
+                 row.creator_id === param ||
+                 row.agent_id === param;
+        }
+        if (idx === 1) {
+          return row.id === param || row.game_id === param;
+        }
         return false;
       });
     }) || null;
@@ -85,6 +104,16 @@ class Statement {
 }
 
 class MockDatabase {
+  private initialized = false;
+  
+  constructor() {
+    // Seed poker tables on first use
+    if (!this.initialized) {
+      mockStorage.set('poker_tables', [...DEFAULT_POKER_TABLES]);
+      this.initialized = true;
+    }
+  }
+  
   prepare(sql: string): Statement {
     return new Statement(sql);
   }
